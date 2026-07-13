@@ -32,8 +32,18 @@ def create_room_token(room_name: str, identity: str, ttl: timedelta = DEFAULT_TO
 
 
 async def create_room(room_name: str, empty_timeout: int = 300) -> None:
-    """Explicitly create/confirm a room via LiveKit's server API (idempotent)."""
+    """Create/confirm a room and request our voice agent be dispatched into it.
+
+    Without an explicit RoomAgentDispatch, LiveKit does not auto-join any
+    worker to a new room — dispatch is opt-in per room, not global.
+    """
     http_url = settings.LIVEKIT_URL.replace("ws://", "http://").replace("wss://", "https://")
     async with api.LiveKitAPI(http_url, settings.LIVEKIT_API_KEY, settings.LIVEKIT_API_SECRET) as lk:
-        await lk.room.create_room(api.CreateRoomRequest(name=room_name, empty_timeout=empty_timeout))
-        logger.info("Room created/confirmed", extra={"room": room_name})
+        await lk.room.create_room(
+            api.CreateRoomRequest(
+                name=room_name,
+                empty_timeout=empty_timeout,
+                agents=[api.RoomAgentDispatch(agent_name=settings.LIVEKIT_AGENT_NAME)],
+            )
+        )
+        logger.info("Room created, agent dispatch requested", extra={"room": room_name})

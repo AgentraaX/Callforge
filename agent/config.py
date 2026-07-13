@@ -10,6 +10,7 @@ class Settings:
     LIVEKIT_URL: str = os.getenv("LIVEKIT_URL", "ws://localhost:7880")
     LIVEKIT_API_KEY: str = os.getenv("LIVEKIT_API_KEY", "")
     LIVEKIT_API_SECRET: str = os.getenv("LIVEKIT_API_SECRET", "")
+    LIVEKIT_AGENT_NAME: str = os.getenv("LIVEKIT_AGENT_NAME", "callforge-voice-agent")
 
     VLLM_BASE_URL: str = os.getenv("VLLM_BASE_URL", "http://localhost:8001/v1")
     VLLM_MODEL: str = os.getenv("VLLM_MODEL", "Qwen/Qwen2.5-7B-Instruct-AWQ")

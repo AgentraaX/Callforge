@@ -15,6 +15,13 @@ _Request/response shape TBD — Day 3._
 ### POST /campaigns/{id}/leads
 
 ## Calls
+
+> **Room creation must go through `agent/livekit_utils.py:create_room()`**, not a raw
+> LiveKit `CreateRoomRequest`. LiveKit does not auto-dispatch any agent to a new
+> room by default (Day 3 finding) — `create_room()` attaches the
+> `RoomAgentDispatch` for `callforge-voice-agent` so the voice agent actually
+> joins. A room created any other way will sit empty.
+
 ### GET /calls
 ### GET /calls/{id}
 ### GET /calls/{id}/transcript
