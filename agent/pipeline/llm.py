@@ -57,6 +57,10 @@ class QwenLLM:
                     ],
                     response_format={"type": "json_object"},
                     temperature=0.2,
+                    # Ollama-specific: keep the model resident so a gap between
+                    # calls doesn't force a ~20s cold reload on the next turn.
+                    # Ignored by a real OpenAI-compatible vLLM server.
+                    extra_body={"keep_alive": "30m"},
                 ),
                 timeout=timeout,
             )

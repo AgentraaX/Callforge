@@ -71,7 +71,7 @@ async def _conversation_loop(ctx: JobContext, track: rtc.Track, audio_source: rt
         decision = await llm.generate(text)
         logger.info(
             "LLM decision",
-            extra={"room": ctx.room.name, "action": decision.action, "message": decision.message},
+            extra={"room": ctx.room.name, "action": decision.action, "reply": decision.message},
         )
         # TODO(Day 6/joint with P4): route decision.action through graph/state_machine.py
         # instead of always just speaking decision.message

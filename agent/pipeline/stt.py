@@ -46,6 +46,8 @@ class WhisperSTT:
 
                 while len(buffer) >= chunk_samples:
                     chunk, buffer = buffer[:chunk_samples], buffer[chunk_samples:]
+                    peak = int(np.abs(chunk).max()) if len(chunk) else 0
+                    logger.info("Audio chunk level", extra={"peak_amplitude": peak, "of_max": 32768})
                     audio = chunk.astype(np.float32) / 32768.0
                     text = await self._transcribe(audio)
                     if text:
