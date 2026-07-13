@@ -6,6 +6,7 @@ from livekit.agents import JobContext, WorkerOptions, cli
 
 from config import configure_logging, settings
 from pipeline.stt import WhisperSTT
+from pipeline.tts import SAMPLE_RATE, KokoroTTS
 
 configure_logging()
 logger = logging.getLogger("agent.main")
@@ -13,6 +14,15 @@ logger = logging.getLogger("agent.main")
 # Loaded once per worker process and reused across every job (jobs run as
 # threads by default), not once per call.
 stt = WhisperSTT()
+tts = KokoroTTS()
+
+
+def _log_task_exception(task: asyncio.Task, *, context: str) -> None:
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        logger.error("Background task failed", extra={"context": context}, exc_info=exc)
 
 
 async def entrypoint(ctx: JobContext) -> None:
@@ -25,6 +35,22 @@ async def entrypoint(ctx: JobContext) -> None:
 
     logger.info("Agent joined room", extra={"room": ctx.room.name})
 
+    audio_source = rtc.AudioSource(sample_rate=SAMPLE_RATE, num_channels=1)
+    audio_track = rtc.LocalAudioTrack.create_audio_track("agent-voice", audio_source)
+    await ctx.room.local_participant.publish_track(
+        audio_track, rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE)
+    )
+    logger.info("Published agent audio track", extra={"room": ctx.room.name})
+
+    # TODO(Day 5): replace this fixed greeting with the LLM's generated reply
+    greeting_task = asyncio.create_task(
+        tts.synthesize_to_track(
+            "Hello, this is the CallForge assistant, checking that the voice pipeline works.",
+            audio_source,
+        )
+    )
+    greeting_task.add_done_callback(lambda t: _log_task_exception(t, context="tts_greeting"))
+
     @ctx.room.on("track_subscribed")
     def on_track_subscribed(track: rtc.Track, publication, participant) -> None:
         if track.kind != rtc.TrackKind.KIND_AUDIO:
@@ -33,10 +59,10 @@ async def entrypoint(ctx: JobContext) -> None:
             "Audio track subscribed",
             extra={"room": ctx.room.name, "participant": participant.identity},
         )
-        asyncio.create_task(_transcribe_loop(ctx, track))
+        transcribe_task = asyncio.create_task(_transcribe_loop(ctx, track))
+        transcribe_task.add_done_callback(lambda t: _log_task_exception(t, context="transcribe_loop"))
 
-    # TODO(Day 5): wire LLM (pipeline/llm.py)
-    # TODO(Day 6): wire TTS (pipeline/tts.py)
+    # TODO(Day 5): wire LLM (pipeline/llm.py) between the transcript and the TTS reply
 
 
 async def _transcribe_loop(ctx: JobContext, track: rtc.Track) -> None:

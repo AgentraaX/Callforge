@@ -9,6 +9,7 @@ python-dotenv
 livekit-agents
 livekit-api
 faster-whisper
+kokoro-onnx
 langgraph
 openai
 ruff

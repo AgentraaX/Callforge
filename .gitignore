@@ -8,3 +8,5 @@ venv/
 .ruff_cache/
 dist/
 build/
+agent/models/*.onnx
+agent/models/*.bin
