@@ -1,0 +1,6 @@
+"""Cross-service constants: Redis key templates, call status enums, etc."""
+
+CALL_STATE_KEY = "call:{call_id}:state"
+CALL_TRANSCRIPT_BUFFER_KEY = "call:{call_id}:transcript_buffer"
+CALL_SENTIMENT_KEY = "call:{call_id}:sentiment"
+DIALER_QUEUE_KEY = "dialer:queue:{campaign_id}"

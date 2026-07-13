@@ -1,0 +1,12 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+COPY agent/ ./agent/
+COPY shared/ ./shared/
+COPY requirements.txt .
+
+RUN pip install --no-cache-dir -r requirements.txt
+
+WORKDIR /app/agent
+CMD ["python", "main.py"]
