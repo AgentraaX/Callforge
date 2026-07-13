@@ -5,6 +5,7 @@ from livekit import rtc
 from livekit.agents import JobContext, WorkerOptions, cli
 
 from config import configure_logging, settings
+from pipeline.llm import QwenLLM
 from pipeline.stt import WhisperSTT
 from pipeline.tts import SAMPLE_RATE, KokoroTTS
 
@@ -15,6 +16,7 @@ logger = logging.getLogger("agent.main")
 # threads by default), not once per call.
 stt = WhisperSTT()
 tts = KokoroTTS()
+llm = QwenLLM()
 
 
 def _log_task_exception(task: asyncio.Task, *, context: str) -> None:
@@ -42,7 +44,6 @@ async def entrypoint(ctx: JobContext) -> None:
     )
     logger.info("Published agent audio track", extra={"room": ctx.room.name})
 
-    # TODO(Day 5): replace this fixed greeting with the LLM's generated reply
     greeting_task = asyncio.create_task(
         tts.synthesize_to_track(
             "Hello, this is the CallForge assistant, checking that the voice pipeline works.",
@@ -59,16 +60,24 @@ async def entrypoint(ctx: JobContext) -> None:
             "Audio track subscribed",
             extra={"room": ctx.room.name, "participant": participant.identity},
         )
-        transcribe_task = asyncio.create_task(_transcribe_loop(ctx, track))
-        transcribe_task.add_done_callback(lambda t: _log_task_exception(t, context="transcribe_loop"))
-
-    # TODO(Day 5): wire LLM (pipeline/llm.py) between the transcript and the TTS reply
+        transcribe_task = asyncio.create_task(_conversation_loop(ctx, track, audio_source))
+        transcribe_task.add_done_callback(lambda t: _log_task_exception(t, context="conversation_loop"))
 
 
-async def _transcribe_loop(ctx: JobContext, track: rtc.Track) -> None:
+async def _conversation_loop(ctx: JobContext, track: rtc.Track, audio_source: rtc.AudioSource) -> None:
     async for text in stt.transcribe_track(track):
         logger.info("Transcript", extra={"room": ctx.room.name, "text": text})
-        # TODO(Day 5): pass this transcript into pipeline/llm.py + graph/state_machine.py
+
+        decision = await llm.generate(text)
+        logger.info(
+            "LLM decision",
+            extra={"room": ctx.room.name, "action": decision.action, "message": decision.message},
+        )
+        # TODO(Day 6/joint with P4): route decision.action through graph/state_machine.py
+        # instead of always just speaking decision.message
+
+        if decision.message:
+            await tts.synthesize_to_track(decision.message, audio_source)
 
 
 if __name__ == "__main__":

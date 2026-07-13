@@ -1,13 +1,77 @@
-"""vLLM (Qwen2.5-7B-AWQ) client, JSON-mode / function-calling only. Built Day 5."""
+"""LLM: Qwen2.5 via an OpenAI-compatible endpoint (Ollama locally, vLLM in prod).
 
+Constrained to JSON-mode structured output only, per the spec doc's Week 1
+hallucination risk note - no free-form generation until the playbook (Day 6
+LangGraph work) is proven.
+"""
+
+import asyncio
+import json
 import logging
 
+from openai import AsyncOpenAI
+from pydantic import BaseModel, ValidationError
+
+from config import settings
+
 logger = logging.getLogger("agent.pipeline.llm")
+
+SYSTEM_PROMPT = """You are the CallForge AI sales assistant on a live phone call.
+Always reply with a single JSON object and nothing else, matching this schema:
+{"action": "respond" | "book_meeting" | "transfer_to_human" | "log_objection", "message": "<what to say out loud>", "parameters": {}}
+
+- "respond": a normal conversational turn.
+- "book_meeting": the prospect agreed to a meeting; put "when" in parameters.
+- "transfer_to_human": the prospect asked for a human, or you cannot help.
+- "log_objection": the prospect raised a sales objection; put "objection_text" in parameters.
+
+Keep "message" short and natural, as if spoken aloud."""
+
+_FALLBACK_MESSAGE = "Sorry, could you say that again?"
+
+
+class LLMDecision(BaseModel):
+    action: str = "respond"
+    message: str = ""
+    parameters: dict = {}
 
 
 class QwenLLM:
     def __init__(self) -> None:
-        raise NotImplementedError("Wire up vLLM OpenAI-compatible client — Day 5")
+        self._client = AsyncOpenAI(base_url=settings.LLM_BASE_URL, api_key=settings.LLM_API_KEY)
 
-    async def generate(self, transcript: str, tools: list):
-        raise NotImplementedError
+    # CPU-only Qwen2.5:7B via Ollama runs 5-20s per turn on this laptop
+    # (no GPU); a real vLLM+AWQ endpoint targets ~150ms. Timeout is generous
+    # to match the current hardware, not the eventual latency budget.
+    async def generate(self, transcript: str, timeout: float = 30.0) -> LLMDecision:
+        if not transcript or not transcript.strip():
+            return LLMDecision(action="respond", message="")
+
+        try:
+            response = await asyncio.wait_for(
+                self._client.chat.completions.create(
+                    model=settings.LLM_MODEL,
+                    messages=[
+                        {"role": "system", "content": SYSTEM_PROMPT},
+                        {"role": "user", "content": transcript},
+                    ],
+                    response_format={"type": "json_object"},
+                    temperature=0.2,
+                ),
+                timeout=timeout,
+            )
+        except asyncio.TimeoutError:
+            logger.error("LLM request timed out", extra={"transcript": transcript, "timeout": timeout})
+            return LLMDecision(action="respond", message=_FALLBACK_MESSAGE)
+        except Exception:
+            logger.exception("LLM request failed", extra={"transcript": transcript})
+            return LLMDecision(action="respond", message=_FALLBACK_MESSAGE)
+
+        raw = response.choices[0].message.content
+        try:
+            decision = LLMDecision(**json.loads(raw))
+        except (json.JSONDecodeError, ValidationError, TypeError):
+            logger.error("LLM returned invalid JSON", extra={"raw": raw})
+            return LLMDecision(action="respond", message=_FALLBACK_MESSAGE)
+
+        return decision
