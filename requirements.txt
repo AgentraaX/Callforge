@@ -8,6 +8,7 @@ pydantic
 python-dotenv
 livekit-agents
 livekit-api
+faster-whisper
 langgraph
 openai
 ruff
