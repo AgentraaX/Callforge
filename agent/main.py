@@ -10,6 +10,7 @@ from enrichment import get_enrichment_for_room
 from pipeline.llm import QwenLLM
 from pipeline.stt import WhisperSTT
 from pipeline.tts import SAMPLE_RATE, KokoroTTS
+from pipeline.vad import BargeInDetector
 from whisper_channel import is_whisper_room, main_room_for, read_and_clear_manager_note, write_manager_note
 
 configure_logging()
@@ -20,6 +21,7 @@ logger = logging.getLogger("agent.main")
 stt = WhisperSTT()
 tts = KokoroTTS()
 llm = QwenLLM()
+vad = BargeInDetector()
 
 
 def _log_task_exception(task: asyncio.Task, *, context: str) -> None:
@@ -28,6 +30,29 @@ def _log_task_exception(task: asyncio.Task, *, context: str) -> None:
     exc = task.exception()
     if exc is not None:
         logger.error("Background task failed", extra={"context": context}, exc_info=exc)
+
+
+def _speak(text: str, audio_source: rtc.AudioSource, current_tts: dict) -> asyncio.Task:
+    """Starts TTS and records it as the currently-playing utterance, so a
+    barge-in can cancel exactly this task (not some earlier finished one)."""
+    task = asyncio.create_task(tts.synthesize_to_track(text, audio_source))
+    current_tts["task"] = task
+    task.add_done_callback(lambda t: _log_task_exception(t, context="tts"))
+    return task
+
+
+def _on_prospect_speech_started(room_name: str, audio_source: rtc.AudioSource, current_tts: dict) -> None:
+    # The VAD re-fires on every micro-pause within the prospect's own
+    # utterance (natural gaps between words), not just once per utterance -
+    # only act, and only log, when the agent actually has something playing
+    # to interrupt, so a burst of re-triggers is a silent no-op rather than
+    # noisy repeated cancellations.
+    task = current_tts.get("task")
+    if task is None or task.done():
+        return
+    task.cancel()
+    audio_source.clear_queue()  # drop anything already queued but not yet played
+    logger.info("Barge-in: prospect started talking, agent interrupted", extra={"room": room_name})
 
 
 async def entrypoint(ctx: JobContext) -> None:
@@ -63,8 +88,8 @@ async def _call_job(ctx: JobContext) -> None:
     pitch = variant["pitch"] if variant else None
     opening_line = pitch or "Hello, this is the CallForge assistant, checking that the voice pipeline works."
 
-    greeting_task = asyncio.create_task(tts.synthesize_to_track(opening_line, audio_source))
-    greeting_task.add_done_callback(lambda t: _log_task_exception(t, context="tts_greeting"))
+    current_tts: dict = {"task": None}  # per-call, local scope - tracks whichever utterance is playing right now
+    _speak(opening_line, audio_source, current_tts)
 
     @ctx.room.on("track_subscribed")
     def on_track_subscribed(track: rtc.Track, publication, participant) -> None:
@@ -74,12 +99,21 @@ async def _call_job(ctx: JobContext) -> None:
             "Audio track subscribed",
             extra={"room": ctx.room.name, "participant": participant.identity},
         )
-        transcribe_task = asyncio.create_task(_conversation_loop(ctx, track, audio_source, pitch))
+        transcribe_task = asyncio.create_task(_conversation_loop(ctx, track, audio_source, pitch, current_tts))
         transcribe_task.add_done_callback(lambda t: _log_task_exception(t, context="conversation_loop"))
+
+        barge_in_task = asyncio.create_task(
+            vad.watch(track, lambda: _on_prospect_speech_started(ctx.room.name, audio_source, current_tts))
+        )
+        barge_in_task.add_done_callback(lambda t: _log_task_exception(t, context="barge_in_watch"))
 
 
 async def _conversation_loop(
-    ctx: JobContext, track: rtc.Track, audio_source: rtc.AudioSource, pitch: str | None
+    ctx: JobContext,
+    track: rtc.Track,
+    audio_source: rtc.AudioSource,
+    pitch: str | None,
+    current_tts: dict,
 ) -> None:
     enrichment = await get_enrichment_for_room(ctx.room.name)
     if enrichment:
@@ -101,7 +135,13 @@ async def _conversation_loop(
         # instead of always just speaking decision.message
 
         if decision.message:
-            await tts.synthesize_to_track(decision.message, audio_source)
+            reply_task = _speak(decision.message, audio_source, current_tts)
+            try:
+                await reply_task
+            except asyncio.CancelledError:
+                # Barge-in cancelled this specific reply - the conversation
+                # loop itself keeps running to hear what the prospect said.
+                logger.info("Reply interrupted by barge-in", extra={"room": ctx.room.name})
 
 
 async def _whisper_job(ctx: JobContext) -> None:
