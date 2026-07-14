@@ -9,6 +9,7 @@ from enrichment import get_enrichment_for_room
 from pipeline.llm import QwenLLM
 from pipeline.stt import WhisperSTT
 from pipeline.tts import SAMPLE_RATE, KokoroTTS
+from whisper_channel import is_whisper_room, main_room_for, read_and_clear_manager_note, write_manager_note
 
 configure_logging()
 logger = logging.getLogger("agent.main")
@@ -36,6 +37,15 @@ async def entrypoint(ctx: JobContext) -> None:
         logger.exception("Failed to join room", extra={"room": ctx.room.name})
         raise
 
+    if is_whisper_room(ctx.room.name):
+        await _whisper_job(ctx)
+        return
+
+    await _call_job(ctx)
+
+
+async def _call_job(ctx: JobContext) -> None:
+    """The normal path: agent talks with the prospect."""
     logger.info("Agent joined room", extra={"room": ctx.room.name})
 
     audio_source = rtc.AudioSource(sample_rate=SAMPLE_RATE, num_channels=1)
@@ -73,7 +83,11 @@ async def _conversation_loop(ctx: JobContext, track: rtc.Track, audio_source: rt
     async for text in stt.transcribe_track(track):
         logger.info("Transcript", extra={"room": ctx.room.name, "text": text})
 
-        decision = await llm.generate(text, enrichment=enrichment)
+        note = await read_and_clear_manager_note(ctx.room.name)
+        if note:
+            logger.info("Applying manager whisper note", extra={"room": ctx.room.name, "note": note})
+
+        decision = await llm.generate(text, enrichment=enrichment, manager_note=note)
         logger.info(
             "LLM decision",
             extra={"room": ctx.room.name, "action": decision.action, "reply": decision.message},
@@ -83,6 +97,30 @@ async def _conversation_loop(ctx: JobContext, track: rtc.Track, audio_source: rt
 
         if decision.message:
             await tts.synthesize_to_track(decision.message, audio_source)
+
+
+async def _whisper_job(ctx: JobContext) -> None:
+    """Ghost Mode: this job's only role is to transcribe whatever the
+    manager says in the whisper room and hand it to the main call's job
+    via Redis - see whisper_channel.py for why this is two jobs, not one."""
+    main_room = main_room_for(ctx.room.name)
+    logger.info("Agent joined whisper room", extra={"whisper_room": ctx.room.name, "main_room": main_room})
+
+    @ctx.room.on("track_subscribed")
+    def on_track_subscribed(track: rtc.Track, publication, participant) -> None:
+        if track.kind != rtc.TrackKind.KIND_AUDIO:
+            return
+        logger.info(
+            "Manager whisper track subscribed",
+            extra={"whisper_room": ctx.room.name, "manager": participant.identity},
+        )
+        task = asyncio.create_task(_transcribe_whisper(track, main_room))
+        task.add_done_callback(lambda t: _log_task_exception(t, context="whisper_transcribe"))
+
+
+async def _transcribe_whisper(track: rtc.Track, main_room: str) -> None:
+    async for text in stt.transcribe_track(track):
+        await write_manager_note(main_room, text)
 
 
 if __name__ == "__main__":

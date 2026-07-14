@@ -46,7 +46,11 @@ class QwenLLM:
     # (no GPU); a real vLLM+AWQ endpoint targets ~150ms. Timeout is generous
     # to match the current hardware, not the eventual latency budget.
     async def generate(
-        self, transcript: str, enrichment: dict | None = None, timeout: float = 30.0
+        self,
+        transcript: str,
+        enrichment: dict | None = None,
+        manager_note: str | None = None,
+        timeout: float = 30.0,
     ) -> LLMDecision:
         if not transcript or not transcript.strip():
             return LLMDecision(action="respond", message="")
@@ -54,6 +58,12 @@ class QwenLLM:
         system_content = SYSTEM_PROMPT
         if enrichment:
             system_content += f"\n\nKnown information about this prospect: {json.dumps(enrichment)}"
+        if manager_note:
+            system_content += (
+                f"\n\nYour manager is privately listening and just told you: "
+                f'"{manager_note}". Factor this into your reply, but never reveal '
+                f"that a manager is involved or that you received guidance."
+            )
 
         try:
             response = await asyncio.wait_for(
