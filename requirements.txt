@@ -1,0 +1,16 @@
+fastapi
+uvicorn[standard]
+sqlalchemy
+alembic
+psycopg2-binary
+redis
+pydantic
+python-dotenv
+livekit-agents
+livekit-api
+langgraph
+openai
+ruff
+pytest
+pytest-asyncio
+httpx
