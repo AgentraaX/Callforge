@@ -20,12 +20,29 @@ See `CallForge_Backend_Structure (2).md` for the full spec.
 | 11 | A/B pitch variant testing — assigned once per call, immutable, ~50/50 split | `day11-ab-pitch-testing` |
 | 12 | Barge-in — agent stops speaking within ~243ms of the prospect talking, no lockup | `day12-barge-in` |
 | 13 | Voice cloning (Chatterbox-Turbo) — 46s to clone+generate a sentence, offline/demo use, watermarked | `day13-voice-cloning` |
-| 14 | Latency tuning across the full pipeline | next |
+| 14 | Latency tuning (CPU-only) — measured real per-stage + end-to-end numbers, not estimates; see note below | `day14-latency-tuning` |
 
 **Local dev note:** this machine has no NVIDIA GPU (Intel Iris Xe only), so local
 LLM testing uses Ollama (`qwen2.5:7b`, CPU) instead of vLLM. Same OpenAI-compatible
 API shape, so `pipeline/llm.py` will point at a real vLLM+Qwen2.5-7B-AWQ endpoint
 on a rented cloud GPU once Week 2 latency work starts (Section 11 of the spec doc).
+
+**Day 14 latency findings (real measurements, `agent/benchmark_latency.py`, n=5 trials/stage):**
+
+| Stage | Before | After | Change |
+|---|---|---|---|
+| STT (faster-whisper) | `base.en` 1666ms mean | `tiny.en` 1043ms mean | **Adopted** — ~1.7x faster, identical transcript on test audio |
+| LLM (Ollama `num_thread`/`num_predict`) | 11.4-13.8s mean, high variance | no change | **Not adopted** — explicit thread pinning and predict-length caps made it slower, not faster; Ollama's own defaults already beat every manual setting tried |
+| LLM (model size) | `qwen2.5:7b`, 4/5 correct JSON decisions, ~13.7s mean | `qwen2.5:1.5b`, 3/5 correct, ~3.2s mean | **Not adopted** — 4.3x faster, but missed both `book_meeting` and `log_objection` on test transcripts, the two structured actions with real downstream consequences (no calendar entry, no CRM log) |
+| End-to-end turn (sum of stage means) | ~25.8s | ~25.8-27.4s across repeated runs | STT's win is real but gets swamped by LLM/TTS run-to-run variance (LLM alone ranged 8.2-16.3s across identical trials) |
+
+**Conclusion:** the doc's <500ms target is a GPU target and is not reachable on
+this CPU. The dominant costs are Qwen2.5-7B inference (~12-14s/turn) and Kokoro
+TTS synthesis (~12-13s/turn) — both already flagged as CPU-bound since Day 5/6.
+The one genuine CPU-side win found (STT model swap) is shipped; the LLM
+downsize and Ollama thread tuning were tested and rejected with real numbers,
+not assumed. Closing the gap to <500ms requires the Week 2 GPU migration
+(vLLM + AWQ quantization), not further CPU tuning.
 
 See `docs/API_CONTRACT.md` and `docs/REDIS_SCHEMA.md` for the P3/P4 shared
 contracts, and `docs/LIVEKIT_SETUP.md` for local LiveKit setup steps.
