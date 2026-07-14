@@ -14,7 +14,7 @@ import asyncio
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 from agent.graph.state_machine import compiled_graph
 from api.services.call_state import get_call_state
