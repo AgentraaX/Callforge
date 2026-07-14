@@ -19,7 +19,8 @@ See `CallForge_Backend_Structure (2).md` for the full spec.
 | 10 | Ghost Mode — manager whisper channel via an isolated room, agent applies guidance silently | `day10-ghost-mode` |
 | 11 | A/B pitch variant testing — assigned once per call, immutable, ~50/50 split | `day11-ab-pitch-testing` |
 | 12 | Barge-in — agent stops speaking within ~243ms of the prospect talking, no lockup | `day12-barge-in` |
-| 13 | Voice cloning (Chatterbox-Turbo) for demo voice | next |
+| 13 | Voice cloning (Chatterbox-Turbo) — 46s to clone+generate a sentence, offline/demo use, watermarked | `day13-voice-cloning` |
+| 14 | Latency tuning across the full pipeline | next |
 
 **Local dev note:** this machine has no NVIDIA GPU (Intel Iris Xe only), so local
 LLM testing uses Ollama (`qwen2.5:7b`, CPU) instead of vLLM. Same OpenAI-compatible

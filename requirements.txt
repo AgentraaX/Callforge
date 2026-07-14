@@ -10,6 +10,10 @@ livekit-agents
 livekit-api
 faster-whisper
 kokoro-onnx
+chatterbox-tts
+# chatterbox-tts's resemble-perth watermarker needs pkg_resources, which
+# newer setuptools no longer bundles - pin until perth stops depending on it.
+setuptools<81
 langgraph
 openai
 ruff
