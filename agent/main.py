@@ -5,6 +5,7 @@ from livekit import rtc
 from livekit.agents import JobContext, WorkerOptions, cli
 
 from config import configure_logging, settings
+from enrichment import get_enrichment_for_room
 from pipeline.llm import QwenLLM
 from pipeline.stt import WhisperSTT
 from pipeline.tts import SAMPLE_RATE, KokoroTTS
@@ -65,10 +66,14 @@ async def entrypoint(ctx: JobContext) -> None:
 
 
 async def _conversation_loop(ctx: JobContext, track: rtc.Track, audio_source: rtc.AudioSource) -> None:
+    enrichment = await get_enrichment_for_room(ctx.room.name)
+    if enrichment:
+        logger.info("Loaded lead enrichment", extra={"room": ctx.room.name, "enrichment": enrichment})
+
     async for text in stt.transcribe_track(track):
         logger.info("Transcript", extra={"room": ctx.room.name, "text": text})
 
-        decision = await llm.generate(text)
+        decision = await llm.generate(text, enrichment=enrichment)
         logger.info(
             "LLM decision",
             extra={"room": ctx.room.name, "action": decision.action, "reply": decision.message},

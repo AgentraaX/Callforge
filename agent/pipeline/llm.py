@@ -25,7 +25,9 @@ Always reply with a single JSON object and nothing else, matching this schema:
 - "transfer_to_human": the prospect asked for a human, or you cannot help.
 - "log_objection": the prospect raised a sales objection; put "objection_text" in parameters.
 
-Keep "message" short and natural, as if spoken aloud."""
+Keep "message" short and natural, as if spoken aloud. If prospect
+information is provided below, weave it in naturally (e.g. mention their
+company) - don't recite it like a lookup."""
 
 _FALLBACK_MESSAGE = "Sorry, could you say that again?"
 
@@ -43,16 +45,22 @@ class QwenLLM:
     # CPU-only Qwen2.5:7B via Ollama runs 5-20s per turn on this laptop
     # (no GPU); a real vLLM+AWQ endpoint targets ~150ms. Timeout is generous
     # to match the current hardware, not the eventual latency budget.
-    async def generate(self, transcript: str, timeout: float = 30.0) -> LLMDecision:
+    async def generate(
+        self, transcript: str, enrichment: dict | None = None, timeout: float = 30.0
+    ) -> LLMDecision:
         if not transcript or not transcript.strip():
             return LLMDecision(action="respond", message="")
+
+        system_content = SYSTEM_PROMPT
+        if enrichment:
+            system_content += f"\n\nKnown information about this prospect: {json.dumps(enrichment)}"
 
         try:
             response = await asyncio.wait_for(
                 self._client.chat.completions.create(
                     model=settings.LLM_MODEL,
                     messages=[
-                        {"role": "system", "content": SYSTEM_PROMPT},
+                        {"role": "system", "content": system_content},
                         {"role": "user", "content": transcript},
                     ],
                     response_format={"type": "json_object"},
