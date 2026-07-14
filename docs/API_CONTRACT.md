@@ -60,12 +60,65 @@ Multipart file upload, field name `file`. Must be `.csv` with `name` and `phone`
 **Response 413:** file exceeds 5MB.
 
 ## Calls
+
 ### GET /calls
+**Query params:**
+- `page` (int, default 1, min 1)
+- `page_size` (int, default 20, min 1, max 100)
+- `status` (string, optional) — one of: `pending`, `active`, `completed`, `failed`, `no-answer`
+
+**Response 200:**
+```json
+{
+  "items": [
+    {
+      "id": "uuid",
+      "lead_id": "uuid",
+      "direction": "inbound | outbound",
+      "status": "pending | active | completed | failed | no-answer",
+      "sentiment": "string | null",
+      "duration": 120,
+      "recording_url": "string | null",
+      "created_at": "iso8601"
+    }
+  ],
+  "total": 42,
+  "page": 1,
+  "page_size": 20
+}
+```
+**Response 400:** invalid status value.
+
 ### GET /calls/{id}
+**Response 200:** single call object (same shape as items above).
+**Response 404:** `{"detail": "Call not found"}`
+
 ### GET /calls/{id}/transcript
+**Query params:** `page` (default 1), `page_size` (default 50, max 100). Ordered oldest → newest.
+**Response 200:**
+```json
+{
+  "items": [
+    {
+      "id": "uuid",
+      "call_id": "uuid",
+      "speaker": "agent | prospect",
+      "text": "string",
+      "timestamp": "iso8601"
+    }
+  ],
+  "total": 38,
+  "page": 1,
+  "page_size": 50
+}
+```
+**Response 404:** `{"detail": "Call not found"}`
+
 ### POST /calls/{id}/takeover
+_Not yet built — Day 5._
+
 ### WS /calls/{id}/stream
-_Not yet built — Day 4._
+_Not yet built — Day 5._
 
 ## Objections
 ### GET /objections
