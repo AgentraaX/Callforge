@@ -4,6 +4,7 @@ import logging
 from livekit import rtc
 from livekit.agents import JobContext, WorkerOptions, cli
 
+from ab_testing import assign_variant_for_room
 from config import configure_logging, settings
 from enrichment import get_enrichment_for_room
 from pipeline.llm import QwenLLM
@@ -55,12 +56,14 @@ async def _call_job(ctx: JobContext) -> None:
     )
     logger.info("Published agent audio track", extra={"room": ctx.room.name})
 
-    greeting_task = asyncio.create_task(
-        tts.synthesize_to_track(
-            "Hello, this is the CallForge assistant, checking that the voice pipeline works.",
-            audio_source,
-        )
-    )
+    # Assigned once, before anything is spoken, so the A/B variant actually
+    # decides the opening line the prospect hears - not just background
+    # context for later turns.
+    variant = await assign_variant_for_room(ctx.room.name)
+    pitch = variant["pitch"] if variant else None
+    opening_line = pitch or "Hello, this is the CallForge assistant, checking that the voice pipeline works."
+
+    greeting_task = asyncio.create_task(tts.synthesize_to_track(opening_line, audio_source))
     greeting_task.add_done_callback(lambda t: _log_task_exception(t, context="tts_greeting"))
 
     @ctx.room.on("track_subscribed")
@@ -71,11 +74,13 @@ async def _call_job(ctx: JobContext) -> None:
             "Audio track subscribed",
             extra={"room": ctx.room.name, "participant": participant.identity},
         )
-        transcribe_task = asyncio.create_task(_conversation_loop(ctx, track, audio_source))
+        transcribe_task = asyncio.create_task(_conversation_loop(ctx, track, audio_source, pitch))
         transcribe_task.add_done_callback(lambda t: _log_task_exception(t, context="conversation_loop"))
 
 
-async def _conversation_loop(ctx: JobContext, track: rtc.Track, audio_source: rtc.AudioSource) -> None:
+async def _conversation_loop(
+    ctx: JobContext, track: rtc.Track, audio_source: rtc.AudioSource, pitch: str | None
+) -> None:
     enrichment = await get_enrichment_for_room(ctx.room.name)
     if enrichment:
         logger.info("Loaded lead enrichment", extra={"room": ctx.room.name, "enrichment": enrichment})
@@ -87,7 +92,7 @@ async def _conversation_loop(ctx: JobContext, track: rtc.Track, audio_source: rt
         if note:
             logger.info("Applying manager whisper note", extra={"room": ctx.room.name, "note": note})
 
-        decision = await llm.generate(text, enrichment=enrichment, manager_note=note)
+        decision = await llm.generate(text, enrichment=enrichment, manager_note=note, pitch=pitch)
         logger.info(
             "LLM decision",
             extra={"room": ctx.room.name, "action": decision.action, "reply": decision.message},

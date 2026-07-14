@@ -50,12 +50,15 @@ class QwenLLM:
         transcript: str,
         enrichment: dict | None = None,
         manager_note: str | None = None,
+        pitch: str | None = None,
         timeout: float = 30.0,
     ) -> LLMDecision:
         if not transcript or not transcript.strip():
             return LLMDecision(action="respond", message="")
 
         system_content = SYSTEM_PROMPT
+        if pitch:
+            system_content += f"\n\nUse this pitch as your guide for this call:\n{pitch}"
         if enrichment:
             system_content += f"\n\nKnown information about this prospect: {json.dumps(enrichment)}"
         if manager_note:
