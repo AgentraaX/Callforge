@@ -176,8 +176,36 @@ _Not yet built._
 
 ## Analytics
 ### GET /analytics/conversion
+Day 12. `conversion_rate` = `bookings / total_calls`, per campaign and
+overall — **not** `bookings / completed_calls`: real test data had 11
+bookings against only 4 calls independently marked `completed` out of 15
+total (calls can pick up a booking without every status transition being
+tracked yet, see Day 7), which would give a >100% rate against that
+denominator. `total_calls` is always the sane one.
+**Response 200:**
+```json
+{
+  "overall": {"total_calls": 15, "completed_calls": 4, "bookings": 11, "conversion_rate": 0.7333},
+  "by_campaign": [
+    {"campaign_id": "uuid", "campaign_name": "string", "total_calls": 15, "completed_calls": 4, "bookings": 11, "conversion_rate": 0.7333}
+  ]
+}
+```
+
 ### GET /analytics/objections
-_Not yet built._
+Day 12. Returns the `objections` playbook (`text`, `response`, `category`,
+`success_rate`) sorted by `success_rate` descending, nulls last — **not**
+an aggregation over real per-call objections. No per-call objection log
+exists yet (`agent/graph/tools.py::log_objection` only logs, deliberately —
+the playbook table has no `call_id`/timestamp column, so writing one row
+per raised objection would corrupt its aggregate-stats semantics). This is
+a static reference snapshot; empty until the playbook is seeded.
+**Response 200:**
+```json
+[
+  {"id": "uuid", "text": "string", "response": "string", "category": "string | null", "success_rate": "number | null"}
+]
+```
 
 ### GET /briefing/today
 Day 9. Covers the day that just ended (an 8 AM briefing summarizes
