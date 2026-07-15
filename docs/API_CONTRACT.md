@@ -160,5 +160,29 @@ _Not yet built._
 ## Analytics
 ### GET /analytics/conversion
 ### GET /analytics/objections
-### GET /briefing/today
 _Not yet built._
+
+### GET /briefing/today
+Day 9. Covers the day that just ended (an 8 AM briefing summarizes
+yesterday, not the still-in-progress today) - same data structure the
+scheduled email is built from (`api/services/briefing.py`), so the in-app
+view and the emailed version can never show different numbers.
+**Response 200:**
+```json
+{
+  "date": "2026-07-14",
+  "total_calls": 8,
+  "calls_by_status": {"completed": 1, "active": 7},
+  "bookings_made": 7,
+  "booking_times": ["iso8601", "..."],
+  "active_campaigns": 2
+}
+```
+
+**Scheduled job:** `send_daily_briefing()` runs daily at 8 AM (APScheduler,
+`api/main.py`'s lifespan) via generic SMTP - `SMTP_HOST`/`SMTP_PORT`/
+`SMTP_USERNAME`/`SMTP_PASSWORD`/`SMTP_FROM_EMAIL`/`BRIEFING_RECIPIENT_EMAIL`
+in `.env`, works with any provider (Gmail, Outlook, a company mail server).
+Idempotent per date via a Redis lock (`briefing:sent:{date}`) - a manual
+trigger outside the schedule, or the job firing twice, never double-sends;
+a failed send releases the lock so a genuine retry still goes through.

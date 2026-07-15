@@ -21,3 +21,4 @@ ruff
 pytest
 pytest-asyncio
 httpx
+apscheduler
