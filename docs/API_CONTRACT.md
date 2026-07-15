@@ -99,6 +99,25 @@ Multipart file upload, field name `file`. Must be `.csv` with `name` and `phone`
 **Response 200:** single call object (same shape as items above).
 **Response 404:** `{"detail": "Call not found"}`
 
+### GET /calls/{id}/live
+Day 7: Redis-backed live state for a dashboard to poll during an active call
+(Section 5 contract: `call:{call_id}:state` / `:sentiment`, written by the
+agent — see `agent/call_lifecycle.py`).
+**Response 200:**
+```json
+{
+  "call_id": "uuid",
+  "status": "pending | active | completed | failed | no-answer",
+  "live_status": "string | null",
+  "live_updated_at": "iso8601 | null",
+  "sentiment": "string | null"
+}
+```
+`status` is the durable Postgres value. `live_status`/`live_updated_at`
+reflect the last Redis write from the agent and are `null` if the call
+never ran through the agent, or the key expired.
+**Response 404:** `{"detail": "Call not found"}`
+
 ### GET /calls/{id}/transcript
 **Query params:** `page` (default 1), `page_size` (default 50, max 100). Ordered oldest → newest.
 **Response 200:**

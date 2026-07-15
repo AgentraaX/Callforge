@@ -25,6 +25,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from call_lifecycle import create_call_for_lead
 from livekit_utils import create_room
 from shared.constants import DIALER_PROCESSING_KEY, DIALER_QUEUE_KEY
 from shared.redis_client import get_redis
@@ -79,6 +80,11 @@ async def dial_next(campaign_id: str) -> bool:
 
     await _confirm_pickup(campaign_id, raw)
     logger.info("Outbound call initiated", extra={"lead_id": lead["lead_id"], "room": room_name})
+
+    # Bookkeeping only - a failed Call row write must never undo a call
+    # that's already been placed (create_call_for_lead logs its own
+    # failures and returns None; agent/main.py copes with no call_id).
+    await create_call_for_lead(lead["lead_id"])
     return True
 
 

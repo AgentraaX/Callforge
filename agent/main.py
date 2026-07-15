@@ -5,6 +5,7 @@ from livekit import rtc
 from livekit.agents import JobContext, WorkerOptions, cli
 
 from ab_testing import assign_variant_for_room
+from call_lifecycle import persist_transcript_turn, resolve_call_id_for_room, set_call_status
 from config import configure_logging, settings
 from enrichment import get_enrichment_for_room
 from pipeline.llm import QwenLLM
@@ -30,6 +31,17 @@ def _log_task_exception(task: asyncio.Task, *, context: str) -> None:
     exc = task.exception()
     if exc is not None:
         logger.error("Background task failed", extra={"context": context}, exc_info=exc)
+
+
+def _on_conversation_loop_done(task: asyncio.Task, *, call_id: str | None, room_name: str, call_finished: dict) -> None:
+    _log_task_exception(task, context="conversation_loop")
+    if task.cancelled():
+        return
+    call_finished["done"] = True
+    status = "failed" if task.exception() is not None else "completed"
+    finish_task = asyncio.create_task(set_call_status(call_id, status))
+    finish_task.add_done_callback(lambda t: _log_task_exception(t, context="call_status_finish"))
+    logger.info("Call ended", extra={"room": room_name, "call_id": call_id, "status": status})
 
 
 def _speak(text: str, audio_source: rtc.AudioSource, current_tts: dict) -> asyncio.Task:
@@ -88,8 +100,20 @@ async def _call_job(ctx: JobContext) -> None:
     pitch = variant["pitch"] if variant else None
     opening_line = pitch or "Hello, this is the CallForge assistant, checking that the voice pipeline works."
 
+    # None for inbound test rooms (no "outbound-{lead_id}" room-name
+    # convention to resolve) - every downstream call_lifecycle call already
+    # no-ops cleanly on None, same as enrichment/ab_testing's lookups.
+    call_id = await resolve_call_id_for_room(ctx.room.name)
+    await set_call_status(call_id, "active")
+
     current_tts: dict = {"task": None}  # per-call, local scope - tracks whichever utterance is playing right now
     _speak(opening_line, audio_source, current_tts)
+
+    # Only set once, by whichever of {conversation loop ends, room
+    # disconnects} happens first - so an abrupt disconnect after a normal
+    # completion (or vice versa) can't flip a call's final status back and
+    # forth.
+    call_finished: dict = {"done": False}
 
     @ctx.room.on("track_subscribed")
     def on_track_subscribed(track: rtc.Track, publication, participant) -> None:
@@ -99,13 +123,32 @@ async def _call_job(ctx: JobContext) -> None:
             "Audio track subscribed",
             extra={"room": ctx.room.name, "participant": participant.identity},
         )
-        transcribe_task = asyncio.create_task(_conversation_loop(ctx, track, audio_source, pitch, current_tts))
-        transcribe_task.add_done_callback(lambda t: _log_task_exception(t, context="conversation_loop"))
+        transcribe_task = asyncio.create_task(
+            _conversation_loop(ctx, track, audio_source, pitch, current_tts, call_id)
+        )
+        transcribe_task.add_done_callback(
+            lambda t: _on_conversation_loop_done(
+                t, call_id=call_id, room_name=ctx.room.name, call_finished=call_finished
+            )
+        )
 
         barge_in_task = asyncio.create_task(
             vad.watch(track, lambda: _on_prospect_speech_started(ctx.room.name, audio_source, current_tts))
         )
         barge_in_task.add_done_callback(lambda t: _log_task_exception(t, context="barge_in_watch"))
+
+    @ctx.room.on("disconnected")
+    def on_disconnected() -> None:
+        # Safety net for a room that drops before any track is ever
+        # subscribed (e.g. the prospect's side never connects) - without
+        # this, call_id would stay "active" forever since the conversation
+        # loop's done-callback would never fire.
+        if call_finished["done"]:
+            return
+        call_finished["done"] = True
+        logger.warning("Room disconnected with no completed conversation loop", extra={"room": ctx.room.name})
+        task = asyncio.create_task(set_call_status(call_id, "failed"))
+        task.add_done_callback(lambda t: _log_task_exception(t, context="call_status_disconnect"))
 
 
 async def _conversation_loop(
@@ -114,6 +157,7 @@ async def _conversation_loop(
     audio_source: rtc.AudioSource,
     pitch: str | None,
     current_tts: dict,
+    call_id: str | None,
 ) -> None:
     enrichment = await get_enrichment_for_room(ctx.room.name)
     if enrichment:
@@ -121,6 +165,7 @@ async def _conversation_loop(
 
     async for text in stt.transcribe_track(track):
         logger.info("Transcript", extra={"room": ctx.room.name, "text": text})
+        await persist_transcript_turn(call_id, "prospect", text)
 
         note = await read_and_clear_manager_note(ctx.room.name)
         if note:
@@ -135,6 +180,7 @@ async def _conversation_loop(
         # instead of always just speaking decision.message
 
         if decision.message:
+            await persist_transcript_turn(call_id, "agent", decision.message)
             reply_task = _speak(decision.message, audio_source, current_tts)
             try:
                 await reply_task

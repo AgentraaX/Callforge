@@ -1,13 +1,15 @@
 """Call log and transcript endpoints. Built Day 4. Owned by Person 4."""
 import uuid
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from api.db.session import get_db
 from api.models import Call, Transcript
-from api.schemas.call import CallOut, PaginatedCalls
+from api.schemas.call import CallOut, LiveCallState, PaginatedCalls
 from api.schemas.transcript import PaginatedTranscript
+from api.services.call_state import get_call_sentiment, get_call_state
 
 router = APIRouter(prefix="/calls", tags=["calls"])
 
@@ -43,6 +45,30 @@ def get_call(call_id: uuid.UUID, db: Session = Depends(get_db)):
     if not call:
         raise HTTPException(status_code=404, detail="Call not found")
     return call
+
+
+@router.get("/{call_id}/live", response_model=LiveCallState)
+async def get_live_call_state(call_id: uuid.UUID, db: Session = Depends(get_db)):
+    """Redis-backed live state for a dashboard to poll during an active call
+    (Section 5 contract: call:{call_id}:state / :sentiment, written by the
+    agent - see agent/call_lifecycle.py). `status` is the durable Postgres
+    value; `live_status`/`live_updated_at` reflect the last Redis write and
+    are None if the call never ran through the agent (or Redis expired it).
+    """
+    call = db.get(Call, call_id)
+    if not call:
+        raise HTTPException(status_code=404, detail="Call not found")
+
+    state = await get_call_state(str(call_id))
+    sentiment = await get_call_sentiment(str(call_id))
+
+    return LiveCallState(
+        call_id=call_id,
+        status=call.status,
+        live_status=state.get("status") if state else None,
+        live_updated_at=datetime.fromisoformat(state["updated_at"]) if state else None,
+        sentiment=sentiment,
+    )
 
 
 @router.get("/{call_id}/transcript", response_model=PaginatedTranscript)

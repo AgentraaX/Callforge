@@ -23,3 +23,11 @@ class PaginatedCalls(BaseModel):
     total: int
     page: int
     page_size: int
+
+
+class LiveCallState(BaseModel):
+    call_id: uuid.UUID
+    status: str
+    live_status: str | None  # from Redis call:{call_id}:state - may lag/be absent between turns
+    live_updated_at: datetime | None
+    sentiment: str | None

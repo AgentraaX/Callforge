@@ -13,7 +13,7 @@ See `CallForge_Backend_Structure (2).md` for the full spec.
 | 4 | `faster-whisper` STT streamed from room audio, ~2s chunks, silence-safe | `day4-whisper-stt` |
 | 5 | Qwen2.5-7B LLM (Ollama locally) + JSON-mode structured decisions | `day5-qwen-llm` |
 | 6 | Kokoro TTS streamed into the room, agent speaks its replies | `day6-kokoro-tts` |
-| 7 | Manual end-to-end verification: STT → LLM → TTS round trip, real mic input | (verified across Days 1–6 branches) |
+| 7 | Full integration test (joint with P4, done solo — P4 mid-exams): closed 4 real gaps found by audit — transcripts were never persisted, `calls.status` never transitioned, no live-state API existed, no disconnect handling. All fixed + verified against live Postgres/Redis. No frontend in this repo, so "dashboard shows a live call" is untestable here; backend plumbing for it now exists. | `day7-integration-test` |
 | 8 | Outbound dialer — pulls leads from Redis queue, in order, no double-dials | `day8-outbound-dialer` |
 | 9 | LinkedIn/lead enrichment data fed into the LLM's context for outbound calls | `day9-lead-enrichment` |
 | 10 | Ghost Mode — manager whisper channel via an isolated room, agent applies guidance silently | `day10-ghost-mode` |
