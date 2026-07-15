@@ -1,0 +1,14 @@
+fastapi
+uvicorn[standard]
+python-multipart
+sqlalchemy
+alembic
+psycopg2-binary
+redis
+pydantic
+python-dotenv
+apscheduler
+httpx
+ruff
+pytest
+pytest-asyncio

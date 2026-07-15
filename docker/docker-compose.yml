@@ -38,15 +38,42 @@ services:
       - redis
     env_file:
       - ../.env
+    environment:
+      # .env's values are for running python directly on the host, where
+      # "localhost" reaches these via the ports/mapping below. Inside the
+      # compose network, containers reach each other by service name -
+      # override just the two keys that differ, everything else in .env
+      # (Cal.com, SMTP, CRM webhook - all external, unaffected either way)
+      # passes through unchanged via env_file above.
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/callforge
+      REDIS_URL: redis://redis:6379/0
 
   agent:
     build:
       context: ..
       dockerfile: docker/Dockerfile.agent
     depends_on:
+      - postgres
       - redis
+      - livekit
     env_file:
       - ../.env
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/callforge
+      REDIS_URL: redis://redis:6379/0
+      LIVEKIT_URL: ws://livekit:7880
+      # Ollama runs natively on the host (not in this compose stack) - not
+      # reachable via "localhost" from inside a container. host.docker.internal
+      # is built into Docker Desktop (Windows/Mac); extra_hosts below makes
+      # the same name resolve on Linux hosts too.
+      LLM_BASE_URL: http://host.docker.internal:11434/v1
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      # Kokoro's ~120MB model files are gitignored and fetched once via
+      # agent/models/download_models.ps1 (not baked into the image) - mount
+      # the host's copy in read-only rather than re-downloading per build.
+      - ../agent/models:/app/agent/models:ro
 
 volumes:
   pgdata:

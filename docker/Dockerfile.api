@@ -4,9 +4,15 @@ WORKDIR /app
 
 COPY api/ ./api/
 COPY shared/ ./shared/
-COPY requirements.txt .
+COPY requirements-api.txt .
 
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -r requirements-api.txt
 
-WORKDIR /app/api
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+# api/main.py imports itself as "api.routers", "api.db.session", etc. (see
+# e.g. api/main.py:8) - these are absolute imports that need /app (not
+# /app/api) as the working directory/PYTHONPATH root. Confirmed by
+# reproducing it: `cd /app/api && uvicorn main:app` fails with
+# "ModuleNotFoundError: No module named 'api'" the moment main.py runs its
+# own `from api.routers import ...`. Stay at /app and point uvicorn at the
+# full module path instead of cd-ing into api/.
+CMD ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000"]
