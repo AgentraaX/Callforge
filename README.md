@@ -15,6 +15,7 @@ See `CallForge_Backend_Structure (2).md` for the full spec.
 | 6 | Kokoro TTS streamed into the room, agent speaks its replies | `day6-kokoro-tts` |
 | 7 | Full integration test (joint with P4, done solo — P4 mid-exams): closed 4 real gaps found by audit — transcripts were never persisted, `calls.status` never transitioned, no live-state API existed, no disconnect handling. All fixed + verified against live Postgres/Redis. No frontend in this repo, so "dashboard shows a live call" is untestable here; backend plumbing for it now exists. | `day7-integration-test` |
 | 8 | Outbound dialer — pulls leads from Redis queue, in order, no double-dials | `day8-outbound-dialer` |
+| 8 (P4) | Cal.com calendar integration (P4's task, done solo — P4 mid-exams): `book_meeting` now creates a real Cal.com event via their API v2, verified against a live account (not mocked) — booking round-tripped with the exact UTC time and attendee confirmed back from Cal.com's API. Added `leads.email` (missing from schema, required for a real attendee). Booking always still gets created even if the calendar call fails or the lead has no email — only `calendar_event_id` is affected. | `day8-calendar-integration` |
 | 9 | LinkedIn/lead enrichment data fed into the LLM's context for outbound calls | `day9-lead-enrichment` |
 | 10 | Ghost Mode — manager whisper channel via an isolated room, agent applies guidance silently | `day10-ghost-mode` |
 | 11 | A/B pitch variant testing — assigned once per call, immutable, ~50/50 split | `day11-ab-pitch-testing` |

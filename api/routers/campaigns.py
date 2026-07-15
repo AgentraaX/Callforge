@@ -88,6 +88,7 @@ def upload_leads(campaign_id: uuid.UUID, file: UploadFile = File(...), db: Sessi
             campaign_id=campaign_id,
             name=name,
             phone=phone,
+            email=(row.get("email") or "").strip() or None,
             company=(row.get("company") or "").strip() or None,
         )
         db.add(lead)

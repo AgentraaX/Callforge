@@ -20,6 +20,7 @@ class Lead(Base):
     )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     phone: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    email: Mapped[str | None] = mapped_column(String(255), nullable=True)
     company: Mapped[str | None] = mapped_column(String(255), nullable=True)
     status: Mapped[str] = mapped_column(String(50), nullable=False, default="new", index=True)
     enrichment_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True)

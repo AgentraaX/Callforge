@@ -46,7 +46,13 @@ Returns list of all campaigns, newest first.
 **Response 404:** `{"detail": "Campaign not found"}`
 
 ### POST /campaigns/{id}/leads
-Multipart file upload, field name `file`. Must be `.csv` with `name` and `phone` columns (`company` optional). Max file size 5MB.
+Multipart file upload, field name `file`. Must be `.csv` with `name` and `phone` columns (`company`, `email` optional). Max file size 5MB.
+`email` is required for Day 8's Cal.com calendar integration to create a
+real attendee-linked event on `book_meeting` (see `api/services/calendar.py`)
+— without it, the booking is still recorded in the `bookings` table, just
+with `calendar_event_id` left `null`. There's no REST surface over
+`bookings` yet (not in Section 6 of the spec doc); it's written internally
+by `agent/graph/tools.py::book_meeting`.
 **Response 201:**
 ```json
 {
