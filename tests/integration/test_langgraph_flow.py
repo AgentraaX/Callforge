@@ -20,13 +20,45 @@ from agent.graph.state_machine import compiled_graph
 from api.services.call_state import get_call_state
 
 
-async def run_scenario(label: str, bant: bool, recursion_limit: int) -> None:
+def _create_fixture_call() -> str:
+    """Scenario 2 reaches book_or_route, which inserts a real Booking row -
+    bookings.call_id is a FK to calls.id, so it needs an actual Call row to
+    point at, not the placeholder "test-123" used by Scenario 1 (which never
+    reaches book_meeting).
+    """
+    from api.db.session import SessionLocal
+    from api.models import Call, Campaign, Lead
+
+    db = SessionLocal()
+    try:
+        campaign = db.query(Campaign).first()
+        if campaign is None:
+            campaign = Campaign(name="LangGraph test fixture")
+            db.add(campaign)
+            db.commit()
+            db.refresh(campaign)
+
+        lead = Lead(campaign_id=campaign.id, name="LangGraph test lead", phone="+15550001111")
+        db.add(lead)
+        db.commit()
+        db.refresh(lead)
+
+        call = Call(lead_id=lead.id, direction="outbound", status="active")
+        db.add(call)
+        db.commit()
+        db.refresh(call)
+        return str(call.id)
+    finally:
+        db.close()
+
+
+async def run_scenario(label: str, bant: bool, recursion_limit: int, call_id: str = "test-123") -> None:
     print(f"\n{'=' * 60}")
     print(label)
     print('=' * 60)
 
     initial_state = {
-        "call_id": "test-123",
+        "call_id": call_id,
         "stage": "",
         "transcript": [],
         "budget_confirmed": bant,
@@ -49,7 +81,7 @@ async def run_scenario(label: str, bant: bool, recursion_limit: int) -> None:
         print(f"  Graph halted: {type(e).__name__}: {e}")
 
     print("\nChecking Redis for call state ...")
-    state_from_redis = await get_call_state("test-123")
+    state_from_redis = await get_call_state(call_id)
     if state_from_redis:
         print(f"  Redis OK — stage in Redis: {state_from_redis.get('stage')}")
     else:
@@ -66,6 +98,7 @@ async def main() -> None:
         label="Scenario 2: complete BANT (expect full path to close)",
         bant=True,
         recursion_limit=20,
+        call_id=_create_fixture_call(),
     )
 
 
