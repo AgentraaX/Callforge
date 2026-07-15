@@ -1,0 +1,24 @@
+# Day 14 production LiveKit config template.
+#
+# Copy to `livekit.prod.yaml` (gitignored, same pattern as .env.example ->
+# .env) and fill in a real key/secret before first deploy - never reuse
+# the committed dev `livekit.yaml`'s devkey/devsecret on a public VM.
+#
+# Generate a real pair with the LiveKit CLI:
+#   livekit-server generate-keys
+# then put the printed API key/secret below (secret must stay >= 32 chars).
+
+port: 7880
+rtc:
+  tcp_port: 7881
+  port_range_start: 50100
+  port_range_end: 51100
+  # false (the dev default) makes LiveKit advertise the container's
+  # private Docker-network IP as ICE candidates - unreachable from any
+  # client outside the VM. true makes it look up and advertise the node's
+  # actual public IP, which is required for WebRTC media to connect from
+  # the internet at all.
+  use_external_ip: true
+
+keys:
+  REPLACE_WITH_REAL_API_KEY: REPLACE_WITH_REAL_SECRET_AT_LEAST_32_CHARS_LONG
