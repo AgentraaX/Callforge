@@ -22,8 +22,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from api.db.session import SessionLocal
 from api.models import Call, Transcript
+from api.services.crm import push_call_outcome
 from shared.constants import CALL_STATE_KEY
 from shared.redis_client import get_redis
+
+_TERMINAL_STATUSES = {"completed", "failed", "no-answer"}
 
 logger = logging.getLogger("agent.call_lifecycle")
 
@@ -100,7 +103,16 @@ def _set_call_status_sync(call_id: str, status: str) -> None:
 async def set_call_status(call_id: str | None, status: str) -> None:
     """Updates calls.status and mirrors a lightweight live-state snapshot
     into Redis (call:{call_id}:state, Section 5 contract) so a dashboard can
-    poll GET /calls/{id}/live without hitting Postgres on every tick."""
+    poll GET /calls/{id}/live without hitting Postgres on every tick.
+
+    Day 10: a terminal status also pushes the call's outcome to the CRM
+    (api/services/crm.py) - this is the one place a real, live call reaches
+    a final status today, unlike the LangGraph outcome field (booked/
+    transferred/closed_lost), which isn't wired into the live pipeline yet
+    (see agent/main.py's TODO). push_call_outcome still reports any Bookings
+    that exist for the call, so Day 8's calendar work isn't wasted even
+    though it's presently only reachable via the standalone graph test.
+    """
     if call_id is None:
         return
 
@@ -116,6 +128,9 @@ async def set_call_status(call_id: str | None, status: str) -> None:
         await redis.set(CALL_STATE_KEY.format(call_id=call_id), json.dumps(state))
     except Exception:
         logger.exception("Failed to mirror call status to Redis", extra={"call_id": call_id})
+
+    if status in _TERMINAL_STATUSES:
+        await push_call_outcome(call_id, status)
 
 
 def _persist_transcript_turn_sync(call_id: str, speaker: str, text: str) -> None:

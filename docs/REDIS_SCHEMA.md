@@ -12,6 +12,8 @@ backend dev before merge, not after.
 | `dialer:processing:{campaign_id}` | Agent (P3) | Agent (P3), dashboard (P4, optional — shows "currently dialing") | Until confirmed or requeued |
 | `ghost_mode:{room_name}:note` | Agent (P3, whisper job) | Agent (P3, main call job) | 5 min or until read |
 | `call:{room_name}:pitch_variant` | Agent (P3) | Agent (P3); should also be read by P4 at call-end and persisted to `calls.pitch_variant` (column doesn't exist yet — needs a migration) | 1 hour |
+| `briefing:sent:{date}` | API (P4, `api/services/briefing.py`) | API (P4) — idempotency lock, not meant to be read elsewhere | 2 days |
+| `crm:webhook:failed` | Agent (P3, via `agent/call_lifecycle.py` → `api/services/crm.py`) | API/agent (P4/P3) — drained by `retry_failed_webhooks()` | Until delivered |
 
 Key templates live in `shared/constants.py` — import them, don't hardcode key strings.
 
@@ -38,3 +40,13 @@ restart. `pitch_variant_a` / `pitch_variant_b` come from the `campaigns`
 table via the lead's `campaign_id`. For accurate analytics this needs to
 end up in Postgres too: please add a `pitch_variant` column to `calls`
 and have call-end persistence read this key before it expires (1 hour).
+
+## Day 10 addition — CRM webhook failure queue
+
+`crm:webhook:failed` is a plain list (RPUSH/LPOP, FIFO), each item a JSON
+string of the same outcome payload `api/services/crm.py::push_call_outcome`
+tried to deliver. A payload only lands here after exhausting 3 delivery
+attempts (1s/2s/4s backoff) — `retry_failed_webhooks()` drains it FIFO,
+re-attempting each; a still-failing payload gets pushed back and drains
+stop for that call (no busy-loop against a CRM that's still down). No TTL —
+an undelivered outcome must not silently expire and vanish.
