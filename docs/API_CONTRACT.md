@@ -124,6 +124,23 @@ reflect the last Redis write from the agent and are `null` if the call
 never ran through the agent, or the key expired.
 **Response 404:** `{"detail": "Call not found"}`
 
+### GET /calls/{id}/recording
+Day 11: streams the call's recording audio (`audio/wav`) through our own
+API — the storage directory (`api/services/recording_storage.py`) is never
+mounted as a static path, so this endpoint is the only way to reach a
+recording, not a raw public URL. **No authentication exists on this
+endpoint yet**, because no auth system exists anywhere in this API (see
+`## Auth` above) — this is the one place a real deployment must add an
+authorization check before going live; recordings and transcripts contain
+real prospect data (Section 11 of the spec doc).
+
+Note: no live-call audio capture is wired in yet either (that's a separate,
+unbuilt piece — LiveKit Egress or a custom capture during the call). This
+endpoint and `save_recording()` are storage-only, verified with a real
+synthesized test clip, not live-call audio.
+**Response 200:** the WAV file bytes.
+**Response 404:** `{"detail": "Recording not found"}` — no recording_url set, or the file is missing.
+
 ### GET /calls/{id}/transcript
 **Query params:** `page` (default 1), `page_size` (default 50, max 100). Ordered oldest → newest.
 **Response 200:**

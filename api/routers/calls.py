@@ -3,6 +3,7 @@ import uuid
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
 from api.db.session import get_db
@@ -10,6 +11,7 @@ from api.models import Call, Transcript
 from api.schemas.call import CallOut, LiveCallState, PaginatedCalls
 from api.schemas.transcript import PaginatedTranscript
 from api.services.call_state import get_call_sentiment, get_call_state
+from api.services.recording_storage import get_recording_path
 
 router = APIRouter(prefix="/calls", tags=["calls"])
 
@@ -69,6 +71,29 @@ async def get_live_call_state(call_id: uuid.UUID, db: Session = Depends(get_db))
         live_updated_at=datetime.fromisoformat(state["updated_at"]) if state else None,
         sentiment=sentiment,
     )
+
+
+@router.get("/{call_id}/recording")
+def get_recording(call_id: uuid.UUID, db: Session = Depends(get_db)):
+    """Day 11: streams the recording's bytes through our own API - the
+    storage directory (api/services/recording_storage.py) is never mounted
+    as a static path, so this endpoint is the only way to reach a
+    recording, not a raw public URL.
+
+    No authentication check exists here yet, because no auth system exists
+    anywhere in this API yet (see docs/API_CONTRACT.md's Auth section) -
+    this is the one place a real deployment must add an authorization check
+    before going live; it must not ship without one.
+    """
+    call = db.get(Call, call_id)
+    if not call or not call.recording_url:
+        raise HTTPException(status_code=404, detail="Recording not found")
+
+    path = get_recording_path(str(call_id))
+    if path is None:
+        raise HTTPException(status_code=404, detail="Recording not found")
+
+    return FileResponse(path, media_type="audio/wav", filename=f"{call_id}.wav")
 
 
 @router.get("/{call_id}/transcript", response_model=PaginatedTranscript)
