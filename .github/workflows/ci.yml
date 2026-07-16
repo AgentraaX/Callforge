@@ -2,9 +2,9 @@ name: CI
 
 on:
   pull_request:
-    branches: [main]
+    branches: [main, dev]
   push:
-    branches: [main]
+    branches: [main, dev]
 
 jobs:
   lint-and-test:
@@ -23,4 +23,9 @@ jobs:
         run: ruff check .
 
       - name: Test
-        run: pytest tests/unit tests/integration -v
+        # tests/integration/test_langgraph_flow.py is a standalone script (no
+        # pytest-discoverable test_* functions, needs live Postgres/Redis) -
+        # pytest correctly finds 0 collectible tests today and exits 5. Treat
+        # only that specific "no tests collected" exit code as non-fatal; a
+        # real failure (exit 1) still fails the build once real tests exist.
+        run: pytest tests/unit tests/integration -v || [ $? -eq 5 ]
