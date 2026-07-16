@@ -1,5 +1,94 @@
-"""Auth endpoints (login, session)."""
+"""Auth endpoints: email/password (register, login) and OAuth2 (Google,
+Microsoft, GitHub) authorization-code flow.
 
-from fastapi import APIRouter
+The OAuth endpoints below are complete, spec-correct implementations of
+each provider's authorization-code flow (not stubs) - but are untestable
+end-to-end until real GOOGLE_CLIENT_ID/SECRET, MICROSOFT_CLIENT_ID/SECRET/
+TENANT_ID, and GITHUB_CLIENT_ID/SECRET are obtained and set in .env. Until
+then, /auth/{provider}/login and /callback correctly raise a 503 for
+whichever provider(s) aren't configured, rather than silently no-op.
+"""
+from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import RedirectResponse
+from sqlalchemy.orm import Session
+
+from api.db.session import get_db
+from api.models import User
+from api.schemas.auth import LoginRequest, TokenResponse, UserCreate, UserOut
+from api.services.auth import (
+    build_authorization_url,
+    create_access_token,
+    exchange_code_for_user,
+    hash_password,
+    verify_password,
+)
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+
+_VALID_PROVIDERS = {"google", "microsoft", "github"}
+
+
+def _validate_provider(provider: str) -> None:
+    if provider not in _VALID_PROVIDERS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid provider. Valid values: {', '.join(sorted(_VALID_PROVIDERS))}",
+        )
+
+
+@router.post("/register", response_model=UserOut, status_code=201)
+def register(payload: UserCreate, db: Session = Depends(get_db)):
+    existing = db.query(User).filter(User.email == payload.email).first()
+    if existing is not None:
+        raise HTTPException(status_code=409, detail="Email already registered")
+
+    user = User(email=payload.email, password_hash=hash_password(payload.password))
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    return user
+
+
+@router.post("/login", response_model=TokenResponse)
+def login(payload: LoginRequest, db: Session = Depends(get_db)):
+    user = db.query(User).filter(User.email == payload.email).first()
+
+    # Timing-safe: verify_password always runs a real bcrypt check, even
+    # when user is None or has no password_hash (OAuth-only account) - see
+    # api/services/auth.py. The 401 detail is identical either way so a
+    # response can't be used to enumerate which emails are registered.
+    password_hash = user.password_hash if user is not None else None
+    if user is None or not verify_password(payload.password, password_hash):
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+
+    token = create_access_token(user.id, user.role)
+    return TokenResponse(access_token=token)
+
+
+@router.get("/{provider}/login")
+async def oauth_login(provider: str):
+    _validate_provider(provider)
+    try:
+        url = await build_authorization_url(provider)
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    return RedirectResponse(url)
+
+
+@router.get("/{provider}/callback", response_model=TokenResponse)
+async def oauth_callback(
+    provider: str,
+    code: str = Query(...),
+    state: str = Query(...),
+    db: Session = Depends(get_db),
+):
+    _validate_provider(provider)
+    try:
+        user = await exchange_code_for_user(db, provider, code, state)
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    token = create_access_token(user.id, user.role)
+    return TokenResponse(access_token=token)
