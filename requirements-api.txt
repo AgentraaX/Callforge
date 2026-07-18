@@ -9,6 +9,13 @@ pydantic
 python-dotenv
 apscheduler
 httpx
+python-jose[cryptography]
+passlib[bcrypt]
+# passlib's bcrypt backend crashes on bcrypt>=4.1 (its wrap-bug detection
+# routine hits bcrypt 4.1+'s now-strict 72-byte limit and raises instead of
+# the old silent-truncate behavior) - confirmed by reproducing it locally.
+bcrypt<4.1
+authlib
 ruff
 pytest
 pytest-asyncio
