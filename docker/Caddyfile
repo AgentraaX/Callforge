@@ -1,0 +1,20 @@
+# Day 14: reverse proxy + automatic HTTPS for the single-VM deploy.
+#
+# API_DOMAIN / LIVEKIT_DOMAIN come from .env (see .env.production.example) -
+# Caddy reads them via env_file wiring in docker-compose.prod.yml. Point
+# both DNS records at the VM's public IP before first `docker compose up`;
+# Caddy requests/renews Let's Encrypt certs for whatever hostname is
+# declared here automatically, no manual cert management.
+#
+# Only the WebSocket signaling connection (LiveKit's ws(s):// control
+# channel, port 7880) goes through Caddy. RTC media itself is raw UDP
+# (docker-compose.yml's 50100-51100/udp range) and can't be reverse
+# proxied - it stays published directly on the host, unaffected by this.
+
+{$API_DOMAIN} {
+	reverse_proxy api:8000
+}
+
+{$LIVEKIT_DOMAIN} {
+	reverse_proxy livekit:7880
+}

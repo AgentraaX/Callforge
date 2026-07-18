@@ -226,6 +226,58 @@ _Not yet built — Day 5._
 ### WS /calls/{id}/stream
 _Not yet built — Day 5._
 
+## Leads
+
+### GET /leads
+Paginated list, newest first. Was a dead stub router (never imported into
+`api/main.py`) until now — lead creation itself still happens only via
+`POST /campaigns/{id}/leads` (CSV upload, see above); this section covers
+listing/viewing/updating leads afterward, for the frontend's kanban
+pipeline view.
+
+**Query params:**
+- `page` (int, default 1, min 1)
+- `page_size` (int, default 20, min 1, max 100)
+- `campaign_id` (uuid, optional) — filter to one campaign
+- `status` (string, optional) — one of: `new`, `contacted`, `qualified`, `booked`, `disqualified`
+
+**Response 200:**
+```json
+{
+  "items": [
+    {
+      "id": "uuid",
+      "campaign_id": "uuid",
+      "name": "string",
+      "phone": "string",
+      "email": "string | null",
+      "company": "string | null",
+      "status": "new | contacted | qualified | booked | disqualified",
+      "created_at": "iso8601"
+    }
+  ],
+  "total": 42,
+  "page": 1,
+  "page_size": 20
+}
+```
+**Response 400:** invalid status value.
+
+### GET /leads/{id}
+**Response 200:** single lead object (same shape as items above).
+**Response 404:** `{"detail": "Lead not found"}`
+
+### PATCH /leads/{id}
+Status-only update, for the kanban pipeline view (drag a lead card
+between columns).
+**Request:**
+```json
+{"status": "new | contacted | qualified | booked | disqualified"}
+```
+**Response 200:** updated lead object.
+**Response 400:** `{"detail": "Invalid status. Valid values: booked, contacted, disqualified, new, qualified"}`
+**Response 404:** `{"detail": "Lead not found"}`
+
 ## Objections
 ### GET /objections
 ### POST /objections

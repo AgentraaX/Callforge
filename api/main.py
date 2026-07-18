@@ -4,8 +4,7 @@ from contextlib import asynccontextmanager
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from fastapi import FastAPI
-
-from api.routers import analytics, auth, briefing, campaigns, calls
+from api.routers import analytics, briefing, calls, campaigns, leads
 from api.services.briefing import send_daily_briefing
 
 
@@ -26,6 +25,7 @@ app = FastAPI(title="CallForge API", lifespan=lifespan)
 app.include_router(auth.router)
 app.include_router(campaigns.router)
 app.include_router(calls.router)
+app.include_router(leads.router)
 app.include_router(briefing.router)
 app.include_router(analytics.router)
 

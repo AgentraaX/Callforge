@@ -1,6 +1,7 @@
 __pycache__/
 *.pyc
 .env
+docker/livekit.prod.yaml
 .venv/
 venv/
 *.egg-info/

@@ -1,0 +1,98 @@
+# Day 14 production overlay. Deploy with:
+#   docker compose --env-file ../.env -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+#
+# --env-file ../.env matters, not just cosmetic: it's what makes the
+# ${POSTGRES_PASSWORD} substitutions below resolve from the repo-root .env
+# instead of docker/.env (Compose's default project-directory guess, which
+# doesn't exist) - without it those variables silently resolve empty.
+#
+# Layers on top of docker-compose.yml (dev) rather than replacing it, so the
+# Day 1-13 base config stays exactly as already reviewed. This file only
+# adds what changes for a real internet-facing VM: no bare DB/cache ports
+# exposed publicly, restart policies survive a VM reboot, healthchecks make
+# `docker compose ps` actually mean something, TLS terminates at Caddy
+# instead of the API talking plain HTTP to the internet, and the Postgres
+# password (hardcoded to "postgres" in the dev base file - fine on a
+# laptop, not fine on the internet) comes from .env instead.
+
+services:
+  postgres:
+    restart: unless-stopped
+    environment:
+      # Overrides just this one key from the base file's environment map
+      # (Compose merges environment key-by-key, unlike ports/volumes lists).
+      # The `:?` form fails deploy loudly if POSTGRES_PASSWORD is unset,
+      # rather than silently falling back to the dev default.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    # Dev exposes 5432 on the host for local tooling (psql, a GUI client).
+    # On a public VM that's a bare, unauthenticated-by-network Postgres
+    # port facing the internet - drop the publish, keep it reachable only
+    # over the compose network (api/agent already connect via the
+    # "postgres" service name, never localhost).
+    ports: !reset []
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    restart: unless-stopped
+    ports: !reset []
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  livekit:
+    restart: unless-stopped
+    volumes:
+      # Dev's livekit.yaml hardcodes the devkey/devsecret pair - fine on a
+      # laptop, not committed-to-git safe on a public VM. Operators copy
+      # livekit.prod.yaml.example -> livekit.prod.yaml (gitignored, same
+      # pattern as .env.example -> .env) with a real generated key/secret
+      # before first deploy; see docs/DEPLOYMENT.md.
+      - ./livekit.prod.yaml:/etc/livekit.yaml:ro
+
+  api:
+    restart: unless-stopped
+    environment:
+      # Base file hardcodes "postgresql://postgres:postgres@postgres:...";
+      # same override reasoning as postgres.environment above.
+      DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/callforge
+    healthcheck:
+      # No curl in python:3.11-slim; urllib is already in the image, so
+      # this adds no extra package rather than installing curl just to
+      # hit our own /health endpoint.
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    # No longer publishing 8000 to the host - Caddy is the one public
+    # entrypoint and reverse-proxies to api:8000 over the compose network.
+    ports: !reset []
+
+  agent:
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/callforge
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    env_file:
+      - ../.env
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - api
+
+volumes:
+  caddy_data:
+  caddy_config:
