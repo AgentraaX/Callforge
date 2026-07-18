@@ -1,6 +1,7 @@
 __pycache__/
 *.pyc
 .env
+docker/livekit.prod.yaml
 .venv/
 venv/
 *.egg-info/
@@ -8,3 +9,6 @@ venv/
 .ruff_cache/
 dist/
 build/
+agent/models/*.onnx
+agent/models/*.bin
+*.wav

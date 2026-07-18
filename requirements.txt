@@ -1,5 +1,13 @@
+# Superset for local host dev (one venv covers both agent/ and api/ code,
+# convenient for a single person testing both sides). Day 13 Docker images
+# use requirements-api.txt / requirements-agent.txt instead - each service
+# only needs its own half, and shipping chatterbox-tts/kokoro-onnx/
+# faster-whisper/livekit-agents into the API container was pure bloat
+# (and triggered a real build failure there - see Dockerfile.agent's
+# numpy-before-pkuseg comment for why the split also fixes a genuine bug).
 fastapi
 uvicorn[standard]
+python-multipart
 sqlalchemy
 alembic
 psycopg2-binary
@@ -8,9 +16,16 @@ pydantic
 python-dotenv
 livekit-agents
 livekit-api
+faster-whisper
+kokoro-onnx
+chatterbox-tts
+# chatterbox-tts's resemble-perth watermarker needs pkg_resources, which
+# newer setuptools no longer bundles - pin until perth stops depending on it.
+setuptools<81
 langgraph
 openai
 ruff
 pytest
 pytest-asyncio
 httpx
+apscheduler

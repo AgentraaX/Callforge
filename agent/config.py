@@ -10,9 +10,14 @@ class Settings:
     LIVEKIT_URL: str = os.getenv("LIVEKIT_URL", "ws://localhost:7880")
     LIVEKIT_API_KEY: str = os.getenv("LIVEKIT_API_KEY", "")
     LIVEKIT_API_SECRET: str = os.getenv("LIVEKIT_API_SECRET", "")
+    LIVEKIT_AGENT_NAME: str = os.getenv("LIVEKIT_AGENT_NAME", "callforge-voice-agent")
 
-    VLLM_BASE_URL: str = os.getenv("VLLM_BASE_URL", "http://localhost:8001/v1")
-    VLLM_MODEL: str = os.getenv("VLLM_MODEL", "Qwen/Qwen2.5-7B-Instruct-AWQ")
+    # OpenAI-compatible endpoint - Ollama locally (no GPU on this machine),
+    # a real vLLM+Qwen2.5-7B-AWQ server in prod. Same API shape either way,
+    # so switching is just an env var change.
+    LLM_BASE_URL: str = os.getenv("LLM_BASE_URL", "http://localhost:11434/v1")
+    LLM_MODEL: str = os.getenv("LLM_MODEL", "qwen2.5:7b")
+    LLM_API_KEY: str = os.getenv("LLM_API_KEY", "not-needed")
 
     REDIS_URL: str = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 

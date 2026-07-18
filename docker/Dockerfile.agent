@@ -2,11 +2,39 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-COPY agent/ ./agent/
-COPY shared/ ./shared/
-COPY requirements.txt .
+# chatterbox-tts -> pkuseg==0.0.25 compiles a Cython extension
+# (pkuseg/inference.pyx) from source - python:3.11-slim has no C++
+# toolchain by design (that's what keeps it "slim"), so this fails with
+# "g++: No such file or directory" without it. Confirmed by reproducing it.
+RUN apt-get update && apt-get install -y --no-install-recommends g++ && rm -rf /var/lib/apt/lists/*
 
-RUN pip install --no-cache-dir -r requirements.txt
+COPY agent/ ./agent/
+COPY api/ ./api/
+COPY shared/ ./shared/
+COPY requirements-agent.txt .
+
+# chatterbox-tts -> pkuseg==0.0.25 also ships a legacy setup.py that does
+# `import numpy` at its own build-metadata step. pip builds it in an
+# isolated env that doesn't see anything from a single combined install,
+# so a fresh/clean build fails with "No module named 'numpy'" too -
+# confirmed by reproducing it separately from the g++ issue above.
+# Installing numpy first, then pkuseg with --no-build-isolation (so it
+# uses the numpy just installed instead of an isolated env with none),
+# fixes it for real rather than papering over it.
+RUN pip install --no-cache-dir numpy
+RUN pip install --no-cache-dir --no-build-isolation pkuseg==0.0.25
+
+# chatterbox-tts pins torch==2.6.0/torchaudio==2.6.0. PyPI's default wheel
+# for those bundles the full NVIDIA CUDA runtime (cublas, cudnn, cusparse,
+# nccl, ...) - multiple gigabytes - even though this whole project has run
+# CPU-only since Day 5 (no GPU on this machine, documented throughout).
+# Installing the CPU-only build first, matching chatterbox-tts's exact
+# pinned version, means pip sees it already satisfied and never pulls the
+# CUDA variant. This isn't a workaround, it's the correct build for this
+# deployment target - see README's Day 14 notes on GPU vs CPU.
+RUN pip install --no-cache-dir torch==2.6.0 torchaudio==2.6.0 --index-url https://download.pytorch.org/whl/cpu
+
+RUN pip install --no-cache-dir -r requirements-agent.txt
 
 WORKDIR /app/agent
 CMD ["python", "main.py"]
