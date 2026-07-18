@@ -2,9 +2,9 @@ name: CI
 
 on:
   pull_request:
-    branches: [main]
+    branches: [main, dev]
   push:
-    branches: [main]
+    branches: [main, dev]
 
 jobs:
   lint-and-test:
@@ -17,10 +17,27 @@ jobs:
           python-version: "3.11"
 
       - name: Install dependencies
-        run: pip install -r requirements.txt
+        # requirements.txt's chatterbox-tts -> pkuseg==0.0.25 fails to build
+        # on Python 3.11 (its C++ extension #includes longintrepr.h, a
+        # CPython-internal header relocated since 3.11 - not fixable by
+        # install ordering, and pkuseg has no prebuilt Linux wheel). Nothing
+        # CI actually runs needs it: ruff is a static linter (never imports
+        # code), and the only test file imports just agent.graph.* + api.*,
+        # never the voice pipeline (chatterbox-tts/kokoro-onnx/faster-whisper/
+        # livekit-agents). requirements-api.txt + langgraph covers exactly
+        # what's exercised - verified in an isolated venv before landing this.
+        # If real tests covering agent/pipeline/* are added later, this needs
+        # those deps back, ideally with pkuseg upgraded/replaced for real
+        # rather than reintroducing this workaround.
+        run: pip install -r requirements-api.txt langgraph
 
       - name: Lint
         run: ruff check .
 
       - name: Test
-        run: pytest tests/unit tests/integration -v
+        # tests/integration/test_langgraph_flow.py is a standalone script (no
+        # pytest-discoverable test_* functions, needs live Postgres/Redis) -
+        # pytest correctly finds 0 collectible tests today and exits 5. Treat
+        # only that specific "no tests collected" exit code as non-fatal; a
+        # real failure (exit 1) still fails the build once real tests exist.
+        run: pytest tests/unit tests/integration -v || [ $? -eq 5 ]
