@@ -14,6 +14,7 @@ backend dev before merge, not after.
 | `call:{room_name}:pitch_variant` | Agent (P3) | Agent (P3); should also be read by P4 at call-end and persisted to `calls.pitch_variant` (column doesn't exist yet — needs a migration) | 1 hour |
 | `briefing:sent:{date}` | API (P4, `api/services/briefing.py`) | API (P4) — idempotency lock, not meant to be read elsewhere | 2 days |
 | `crm:webhook:failed` | Agent (P3, via `agent/call_lifecycle.py` → `api/services/crm.py`) | API/agent (P4/P3) — drained by `retry_failed_webhooks()` | Until delivered |
+| `oauth:state:{state}` | API (P4, `api/services/auth.py`, on `GET /auth/{provider}/login`) | API (P4) — single-use CSRF check on `GET /auth/{provider}/callback`, deleted on read via `GETDEL` | 10 min |
 
 Key templates live in `shared/constants.py` — import them, don't hardcode key strings.
 
