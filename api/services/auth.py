@@ -1,12 +1,12 @@
 """Auth service: password hashing/verification, JWT issue/verify, and
-OAuth2 authorization-code exchange + user-linking for Google/Microsoft/GitHub.
+OAuth2 authorization-code exchange + user-linking for Google/GitHub.
 
 OAuth endpoints are real, spec-correct implementations against each
 provider's actual OAuth2/OIDC endpoints - not stubs. They are untestable
-end-to-end until real GOOGLE_CLIENT_ID/SECRET, MICROSOFT_CLIENT_ID/SECRET/
-TENANT_ID, and GITHUB_CLIENT_ID/SECRET are obtained and set in .env (see
-.env.example) - each provider's /login and /callback will raise a clear
-503 until its own credentials are configured, rather than silently no-op.
+end-to-end until real GOOGLE_CLIENT_ID/SECRET and GITHUB_CLIENT_ID/SECRET
+are obtained and set in .env (see .env.example) - each provider's /login
+and /callback will raise a clear 503 until its own credentials are
+configured, rather than silently no-op.
 """
 import logging
 import os
@@ -103,24 +103,6 @@ def _provider_config(provider: str) -> dict:
             "scope": "openid email profile",
         }
 
-    if provider == "microsoft":
-        client_id = os.getenv("MICROSOFT_CLIENT_ID")
-        client_secret = os.getenv("MICROSOFT_CLIENT_SECRET")
-        tenant_id = os.getenv("MICROSOFT_TENANT_ID")
-        if not client_id or not client_secret or not tenant_id:
-            raise RuntimeError(
-                "Microsoft OAuth is not configured "
-                "(MICROSOFT_CLIENT_ID/MICROSOFT_CLIENT_SECRET/MICROSOFT_TENANT_ID missing)"
-            )
-        return {
-            "client_id": client_id,
-            "client_secret": client_secret,
-            "authorize_url": f"https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/authorize",
-            "token_url": f"https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token",
-            "userinfo_url": "https://graph.microsoft.com/oidc/userinfo",
-            "scope": "openid email profile",
-        }
-
     if provider == "github":
         client_id = os.getenv("GITHUB_CLIENT_ID")
         client_secret = os.getenv("GITHUB_CLIENT_SECRET")
@@ -186,9 +168,6 @@ def _fetch_provider_identity(provider: str, config: dict, code: str) -> tuple[st
     userinfo = session.get(config["userinfo_url"]).json()
 
     if provider == "google":
-        return str(userinfo["sub"]), userinfo.get("email")
-
-    if provider == "microsoft":
         return str(userinfo["sub"]), userinfo.get("email")
 
     if provider == "github":

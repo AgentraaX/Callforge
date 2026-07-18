@@ -16,7 +16,7 @@ class User(Base):
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
     email: Mapped[str] = mapped_column(String(255), nullable=False, unique=True, index=True)
-    # Nullable: an OAuth-only signup (Google/Microsoft/GitHub) never sets a
+    # Nullable: an OAuth-only signup (Google/GitHub) never sets a
     # password - see api/models/oauth_account.py. Email/password signup
     # always sets this; api/services/auth.py enforces that at the point of
     # registration rather than here at the column level.

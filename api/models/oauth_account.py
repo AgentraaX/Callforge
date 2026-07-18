@@ -1,4 +1,4 @@
-"""OAuthAccount model — links a user to a Google/Microsoft/GitHub identity.
+"""OAuthAccount model — links a user to a Google/GitHub identity.
 
 One row per (user, provider) link. A user can link multiple providers
 (one row each); a given provider identity can only ever link to one user.
@@ -28,7 +28,7 @@ class OAuthAccount(Base):
     user_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
     )
-    provider: Mapped[str] = mapped_column(String(50), nullable=False)  # google | microsoft | github
+    provider: Mapped[str] = mapped_column(String(50), nullable=False)  # google | github
     provider_user_id: Mapped[str] = mapped_column(String(255), nullable=False)
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

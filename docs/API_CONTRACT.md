@@ -31,24 +31,30 @@ no matching user exists, so response time can't be used to enumerate registered
 emails either).
 
 ### GET /auth/{provider}/login
-`{provider}` must be exactly one of `google`, `microsoft`, `github`.
+`{provider}` must be exactly one of `google`, `github`.
 Redirects (302) to the provider's consent screen. A short-lived, single-use
 CSRF `state` token is generated and stored in Redis (`oauth:state:{state}`,
 10 min TTL — see `docs/REDIS_SCHEMA.md`), validated on the matching callback.
-**Response 400:** `{"detail": "Invalid provider. Valid values: github, google, microsoft"}`
+**Response 400:** `{"detail": "Invalid provider. Valid values: github, google"}`
 **Response 503:** `{"detail": "<Provider> OAuth is not configured (...)"}` — real
-Google/Microsoft/GitHub app credentials have not been obtained yet; each
+Google/GitHub app credentials have not been obtained yet; each
 provider independently 503s until its own `.env` vars are set (see `.env.example`).
 This endpoint is a complete, spec-correct implementation per provider, not a
 stub — it is untestable end-to-end only because live credentials don't exist yet.
 
 ### GET /auth/{provider}/callback
-**Query params:** `code` (string, required — provider's authorization code),
-`state` (string, required — must match the value issued by `/login`).
+**Query params:** `code` (string, required on a successful provider redirect —
+absent if the user declined consent), `state` (string, required — must match
+the value issued by `/login`), `error`/`error_description` (string, present
+instead of `code` if the user declined consent on the provider's screen).
 **Response 200:** same shape as `POST /auth/login`.
-**Response 400:** `{"detail": "Invalid provider. ..."}` (bad `{provider}`), or
-`{"detail": "OAuth state is invalid, expired, or already used"}` /
-`{"detail": "OAuth state does not match the callback provider"}`.
+**Response 400:** `{"detail": "Invalid provider. ..."}` (bad `{provider}`),
+`{"detail": "OAuth state is invalid, expired, or already used"}` (state's
+10 min TTL elapsed, or it was already consumed — see `/login` above),
+`{"detail": "OAuth state does not match the callback provider"}`,
+`{"detail": "Missing 'code' query parameter"}`, or
+`{"detail": "<provider> authorization was not completed: <reason>"}`
+(user declined consent on the provider's own screen).
 **Response 503:** provider not configured (same as `/login`).
 
 First sign-in via a given provider creates a new `users` row

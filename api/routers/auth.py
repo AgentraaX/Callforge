@@ -1,12 +1,12 @@
 """Auth endpoints: email/password (register, login) and OAuth2 (Google,
-Microsoft, GitHub) authorization-code flow.
+GitHub) authorization-code flow.
 
 The OAuth endpoints below are complete, spec-correct implementations of
 each provider's authorization-code flow (not stubs) - but are untestable
-end-to-end until real GOOGLE_CLIENT_ID/SECRET, MICROSOFT_CLIENT_ID/SECRET/
-TENANT_ID, and GITHUB_CLIENT_ID/SECRET are obtained and set in .env. Until
-then, /auth/{provider}/login and /callback correctly raise a 503 for
-whichever provider(s) aren't configured, rather than silently no-op.
+end-to-end until real GOOGLE_CLIENT_ID/SECRET and GITHUB_CLIENT_ID/SECRET
+are obtained and set in .env. Until then, /auth/{provider}/login and
+/callback correctly raise a 503 for whichever provider(s) aren't
+configured, rather than silently no-op.
 """
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import RedirectResponse
@@ -25,7 +25,7 @@ from api.services.auth import (
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
-_VALID_PROVIDERS = {"google", "microsoft", "github"}
+_VALID_PROVIDERS = {"google", "github"}
 
 
 def _validate_provider(provider: str) -> None:
@@ -78,11 +78,26 @@ async def oauth_login(provider: str):
 @router.get("/{provider}/callback", response_model=TokenResponse)
 async def oauth_callback(
     provider: str,
-    code: str = Query(...),
+    code: str | None = Query(None),
     state: str = Query(...),
+    error: str | None = Query(None),
+    error_description: str | None = Query(None),
     db: Session = Depends(get_db),
 ):
     _validate_provider(provider)
+
+    # The user can decline consent on the provider's own screen - it redirects
+    # back with `error`/`error_description` instead of `code`, which isn't a
+    # validation failure on our end and shouldn't 422 as if `code` were
+    # malformed; report it as a clean 400 instead.
+    if error is not None:
+        raise HTTPException(
+            status_code=400,
+            detail=f"{provider} authorization was not completed: {error_description or error}",
+        )
+    if code is None:
+        raise HTTPException(status_code=400, detail="Missing 'code' query parameter")
+
     try:
         user = await exchange_code_for_user(db, provider, code, state)
     except RuntimeError as e:
