@@ -7,11 +7,12 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from sqlalchemy.orm import Session
 
 from api.db.session import get_db
+from api.dependencies import get_current_user
 from api.models import Campaign, Lead
 from api.schemas.campaign import CampaignCreate, CampaignUpdate, CampaignOut
 from api.schemas.lead import LeadUploadResult
 
-router = APIRouter(prefix="/campaigns", tags=["campaigns"])
+router = APIRouter(prefix="/campaigns", tags=["campaigns"], dependencies=[Depends(get_current_user)])
 
 
 @router.get("", response_model=list[CampaignOut])

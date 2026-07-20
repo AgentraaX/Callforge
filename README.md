@@ -3,6 +3,68 @@
 AI voice-calling backend (inbound/outbound sales calls) — LiveKit + Whisper + Qwen2.5 + Kokoro + LangGraph.
 See `CallForge_Backend_Structure (2).md` for the full spec.
 
+## Local dev session notes (2026-07-20) — running it end-to-end + known issues
+
+Got the full stack running locally (Docker postgres/redis/livekit + native
+API/agent/frontend) and exercised the real "Talk to the AI" demo call
+end-to-end. Real bugs found and fixed along the way:
+
+- **`api/main.py` never called `load_dotenv()`.** Only
+  `api/services/{briefing,calendar,crm}.py` did, and each of those already
+  admitted in their own comments that it was "import-order luck, not a
+  guarantee." Everything reading `DATABASE_URL`/etc. via bare `os.getenv()`
+  (e.g. `api/db/session.py`) silently fell back to hardcoded defaults
+  whenever the API ran outside Docker (where `env_file` supplies real OS
+  env vars instead). Fixed by calling `load_dotenv()` first thing in
+  `api/main.py`, before any project import that reads env vars at import
+  time.
+- **LiveKit-in-Docker on Windows needs `rtc.node_ip` set** (`docker/livekit.yaml`).
+  With `use_external_ip: false` and no `node_ip`, the server advertises its
+  own Docker-internal IP as the ICE candidate, which no browser on the host
+  can ever reach — call connect fails with "could not establish pc
+  connection." Set to `127.0.0.1` for same-machine local dev.
+- **`docker-compose.yml`'s `50100-51100/udp` port range (1001 ports) silently
+  failed to publish some ports on Docker Desktop for Windows** — the two TCP
+  ports (7880/7881) ended up with empty host bindings even though the
+  `docker compose up` command reported success. Shrunk the range to
+  `50100-50150` (50 ports, plenty for a handful of concurrent dev calls) and
+  it now binds cleanly every time.
+- **Barge-in could cancel a reply before any audio ever played.** On
+  CPU-only hardware (no GPU here), Kokoro can take longer than the ~243ms
+  barge-in budget to produce its first audio chunk. Added an 800ms grace
+  period (`agent/main.py`, `_BARGE_IN_GRACE_PERIOD_S`) after a reply starts
+  before a barge-in can cancel it.
+- **LiveKit Agents' default CPU-load-based dispatch throttle
+  (`load_threshold=0.7`) blocked call dispatch entirely** whenever ambient
+  system load (other processes on the dev machine) sat near/above it, even
+  with zero active calls — logs showed `no worker available to handle job`
+  with a worker registered and idle. Raised to `0.95` in `agent/main.py`'s
+  `WorkerOptions`.
+- **`LLM_MODEL` swapped to `qwen2.5:1.5b` for local dev demos.** `qwen2.5:7b`
+  was repeatedly hitting its own 30s timeout under CPU contention (this
+  laptop has no GPU — see the Day 14 latency notes above). `1.5b` replies in
+  ~2-3s once warm. Per Day 14's own findings, `1.5b` is less reliable for
+  `book_meeting`/`log_objection` — fine for demoing conversational flow, not
+  a substitute for the real GPU-hosted model in Section 11 of the spec doc.
+- Ports were remapped in this session's local `.env` (not committed) because
+  another, unrelated project's Docker stack was already bound to
+  5432/6379/7880/7881/3000/8000 on the same machine — CallForge now runs on
+  5433/6380/7980-7981/8090/3002 there. That's a local-environment detail,
+  not a code change; a clean machine can use the original ports in
+  `.env.example`.
+
+**Still open for the team:**
+- The CPU-contention/timeout issues above are workarounds for this specific
+  dev laptop, not a fix for the underlying latency (see Day 14's own
+  conclusion — real fix is the GPU/vLLM migration in Section 11).
+- No real PSTN/SIP calling exists anywhere in this project yet — every
+  "call" is a LiveKit room (browser-mic demo or `agent/dialer.py`'s
+  simulated outbound dial). `dialer.py`'s own docstring already flags this.
+- A full audit of `callforge_frontend`'s "What's Real vs. Simulated" table
+  is due — a large batch of previously-uncommitted work (auth, contact form,
+  demo call, campaigns/leads CRUD) is included in this commit and hasn't
+  been re-verified item-by-item against that table.
+
 ## Backend Build Log — Person 3 (Voice Pipeline)
 
 | Day | Shipped | Branch |

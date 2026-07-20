@@ -5,10 +5,11 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from api.db.session import get_db
+from api.dependencies import get_current_user
 from api.models import Lead
 from api.schemas.lead import LeadOut, LeadUpdate, PaginatedLeads
 
-router = APIRouter(prefix="/leads", tags=["leads"])
+router = APIRouter(prefix="/leads", tags=["leads"], dependencies=[Depends(get_current_user)])
 
 _VALID_STATUSES = {"new", "contacted", "qualified", "booked", "disqualified"}
 

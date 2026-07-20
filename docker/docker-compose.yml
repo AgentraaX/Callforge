@@ -8,22 +8,22 @@ services:
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: callforge
     ports:
-      - "5432:5432"
+      - "5433:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
 
   redis:
     image: redis:7
     ports:
-      - "6379:6379"
+      - "6380:6379"
 
   livekit:
     image: livekit/livekit-server:latest
     command: --config /etc/livekit.yaml
     ports:
-      - "7880:7880"
-      - "7881:7881"
-      - "50100-51100:50100-51100/udp"
+      - "7980:7880"
+      - "7981:7881"
+      - "50100-50150:50100-50150/udp"
     volumes:
       - ./livekit.yaml:/etc/livekit.yaml:ro
 
@@ -77,3 +77,7 @@ services:
 
 volumes:
   pgdata:
+
+networks:
+  default:
+    name: callforge-network

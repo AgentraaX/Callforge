@@ -1,11 +1,12 @@
 """Morning briefing endpoint. Built Day 9."""
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 
+from api.dependencies import get_current_user
 from api.services.briefing import generate_briefing_data
 
-router = APIRouter(prefix="/briefing", tags=["briefing"])
+router = APIRouter(prefix="/briefing", tags=["briefing"], dependencies=[Depends(get_current_user)])
 
 
 @router.get("/today")

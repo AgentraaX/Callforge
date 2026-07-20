@@ -13,6 +13,7 @@ from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 
 from api.db.session import get_db
+from api.dependencies import get_current_user
 from api.models import User
 from api.schemas.auth import LoginRequest, TokenResponse, UserCreate, UserOut
 from api.services.auth import (
@@ -63,6 +64,11 @@ def login(payload: LoginRequest, db: Session = Depends(get_db)):
 
     token = create_access_token(user.id, user.role)
     return TokenResponse(access_token=token)
+
+
+@router.get("/me", response_model=UserOut)
+def get_me(user: User = Depends(get_current_user)):
+    return user
 
 
 @router.get("/{provider}/login")

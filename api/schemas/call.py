@@ -31,3 +31,13 @@ class LiveCallState(BaseModel):
     live_status: str | None  # from Redis call:{call_id}:state - may lag/be absent between turns
     live_updated_at: datetime | None
     sentiment: str | None
+
+
+class CallMonitorToken(BaseModel):
+    """Listen-only join credentials for a manager - see
+    api/services/livekit_rooms.py. The token is scoped to `room_name` with
+    publish explicitly disabled (subscribe-only)."""
+
+    room_name: str
+    token: str
+    livekit_url: str

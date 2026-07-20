@@ -64,6 +64,19 @@ same linked user. If a `users` row with a matching email already exists (e.g. th
 registered via email/password first), the new OAuth link attaches to that existing
 user instead of creating a duplicate account.
 
+### GET /auth/me
+Requires `Authorization: Bearer <token>`.
+**Response 200:** same shape as `POST /auth/register`'s response.
+**Response 401:** `{"detail": "Missing or invalid Authorization header" | "Invalid or expired token" | "Invalid token subject" | "User no longer exists"}`
+
+## Auth on every other endpoint below
+`/campaigns`, `/leads`, `/calls`, `/analytics`, `/briefing` all now require
+`Authorization: Bearer <token>` on every route (see `api/dependencies.py`'s
+`get_current_user`, applied at the router level) — a request without a valid
+token gets the same 401 shapes as `GET /auth/me` above. This was a breaking
+change applied once the frontend was confirmed ready to send tokens on every
+request (see `CallForge_Work.docx` section 2.3).
+
 ## Campaigns
 
 ### GET /campaigns
@@ -220,8 +233,36 @@ synthesized test clip, not live-call audio.
 ```
 **Response 404:** `{"detail": "Call not found"}`
 
+### POST /calls/{id}/monitor
+Listen-only join for a manager: mints a **subscribe-only** LiveKit token
+(`can_publish`/`can_publish_data` explicitly `False`) for the call's actual
+room, so a manager can hear a live call without ever being able to speak
+into it. Room name is derived via the `outbound-{lead_id}` convention
+(`agent/call_lifecycle.py`), not a stored column.
+
+This is deliberately **not** Day 10 Ghost Mode
+(`enable_ghost_mode`/`create_manager_whisper_token` in
+`agent/livekit_utils.py`) — that joins a separate `{room}-whisper` room used
+for a one-way voice-to-text hint channel to the AI (`agent/whisper_channel.py`),
+with no main-call audio piped into it, so it cannot be used to listen to a
+live call. See `api/services/livekit_rooms.py`'s module docstring.
+**Response 200:**
+```json
+{
+  "room_name": "outbound-<lead_id>",
+  "token": "string (JWT, LiveKit access token)",
+  "livekit_url": "ws://..."
+}
+```
+**Response 404:** `{"detail": "Call not found"}`
+**Response 409:** `{"detail": "Call is not active"}`
+**Response 503:** LiveKit not configured or unreachable.
+
 ### POST /calls/{id}/takeover
-_Not yet built — Day 5._
+_Not yet built — full "take over" (listen + speak, replacing the AI) is a
+separate, unscoped decision (see `CallForge_Work.docx` section 2.1: is
+hangup in scope? does this need auth immediately given it can hijack a live
+call?). Only the listen-only half shipped, as `POST /calls/{id}/monitor` above._
 
 ### WS /calls/{id}/stream
 _Not yet built — Day 5._
@@ -277,6 +318,43 @@ between columns).
 **Response 200:** updated lead object.
 **Response 400:** `{"detail": "Invalid status. Valid values: booked, contacted, disqualified, new, qualified"}`
 **Response 404:** `{"detail": "Lead not found"}`
+
+## Contact
+
+### POST /contact
+**No authentication** — public landing-page contact form. Sends an email via
+the same generic SMTP setup as the daily briefing (`api/services/contact.py`),
+to `CONTACT_RECIPIENT_EMAIL` (falls back to `BRIEFING_RECIPIENT_EMAIL`).
+**Request:**
+```json
+{"name": "string", "email": "string (valid email)", "message": "string"}
+```
+**Response 200:** `{"ok": true}`
+**Response 422:** invalid email/empty fields.
+**Response 503:** SMTP not configured.
+**Response 502:** send failed (provider error, network issue, etc).
+
+## Demo
+
+### POST /demo/call/start
+**No authentication** — public landing-page "Talk to the AI" widget. Creates
+a real LiveKit room (`demo-{uuid4()}`) with the voice agent dispatched into
+it, and mints a full-duplex token (`can_publish`/`can_subscribe` both
+`True`) for a synthetic visitor identity.
+
+**Not rate-limited.** Every call here spins up the real voice-AI pipeline
+(LLM + TTS) and costs real money/compute. Acceptable for an internal/dev
+pass; needs a per-IP or similar throttle before this is public on the open
+internet — flagged, not solved, in this pass.
+**Response 200:**
+```json
+{
+  "room_name": "demo-<uuid>",
+  "token": "string (JWT, LiveKit access token)",
+  "livekit_url": "ws://..."
+}
+```
+**Response 503:** LiveKit not configured or unreachable.
 
 ## Objections
 ### GET /objections

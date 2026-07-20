@@ -1,4 +1,5 @@
 """Call log and transcript endpoints. Built Day 4. Owned by Person 4."""
+import logging
 import uuid
 from datetime import datetime
 
@@ -7,13 +8,17 @@ from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
 from api.db.session import get_db
-from api.models import Call, Transcript
-from api.schemas.call import CallOut, LiveCallState, PaginatedCalls
+from api.dependencies import get_current_user
+from api.models import Call, Transcript, User
+from api.schemas.call import CallMonitorToken, CallOut, LiveCallState, PaginatedCalls
 from api.schemas.transcript import PaginatedTranscript
 from api.services.call_state import get_call_sentiment, get_call_state
+from api.services.livekit_rooms import create_listener_token, livekit_url
 from api.services.recording_storage import get_recording_path
 
-router = APIRouter(prefix="/calls", tags=["calls"])
+logger = logging.getLogger("api.routers.calls")
+
+router = APIRouter(prefix="/calls", tags=["calls"], dependencies=[Depends(get_current_user)])
 
 _VALID_STATUSES = {"pending", "active", "completed", "failed", "no-answer"}
 
@@ -71,6 +76,49 @@ async def get_live_call_state(call_id: uuid.UUID, db: Session = Depends(get_db))
         live_updated_at=datetime.fromisoformat(state["updated_at"]) if state else None,
         sentiment=sentiment,
     )
+
+
+@router.post("/{call_id}/monitor", response_model=CallMonitorToken)
+async def monitor_call(
+    call_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Listen-only join: mints a subscribe-only token (can_publish=False)
+    for the call's *actual* room, so a manager can hear it live without
+    ever being able to speak into it or otherwise affect it.
+
+    This is deliberately NOT Day 10 Ghost Mode (enable_ghost_mode /
+    create_manager_whisper_token in agent/livekit_utils.py) - that joins a
+    separate "{room}-whisper" room used for a one-way voice-to-text hint
+    channel to the AI, with no main-call audio piped into it, so it cannot
+    be used to listen to a live call (see api/services/livekit_rooms.py's
+    module docstring).
+
+    Room name is derived via the outbound-{lead_id} convention
+    (agent/call_lifecycle.py's _OUTBOUND_ROOM_RE) - no room_name column
+    exists on Call yet. Full "take over" (speak, replace the AI) is a
+    separate, unscoped decision - see docs/API_CONTRACT.md's
+    POST /calls/{id}/takeover entry.
+    """
+    call = db.get(Call, call_id)
+    if not call:
+        raise HTTPException(status_code=404, detail="Call not found")
+    if call.status != "active":
+        raise HTTPException(status_code=409, detail="Call is not active")
+
+    room_name = f"outbound-{call.lead_id}"
+    try:
+        token = create_listener_token(room_name, identity=f"manager-{user.id}")
+        url = livekit_url()
+    except RuntimeError as e:
+        # LIVEKIT_API_KEY/SECRET not configured.
+        raise HTTPException(status_code=503, detail=str(e))
+    except Exception:
+        logger.exception("Failed to mint listen-only token for call %s", call_id)
+        raise HTTPException(status_code=503, detail="LiveKit is unavailable right now")
+
+    return CallMonitorToken(room_name=room_name, token=token, livekit_url=url)
 
 
 @router.get("/{call_id}/recording")

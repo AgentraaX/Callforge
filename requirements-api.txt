@@ -6,6 +6,8 @@ alembic
 psycopg2-binary
 redis
 pydantic
+# pydantic's EmailStr (used by api/schemas/contact.py) needs this extra.
+email-validator
 python-dotenv
 apscheduler
 httpx
@@ -16,6 +18,13 @@ passlib[bcrypt]
 # the old silent-truncate behavior) - confirmed by reproducing it locally.
 bcrypt<4.1
 authlib
+# For POST /calls/{id}/monitor (manager listen-in) - api/services/livekit_rooms.py
+livekit-api
+# authlib's requests_client integration (used for the Google/GitHub OAuth
+# code exchange in api/services/auth.py) imports `requests` directly but
+# doesn't declare it as its own dependency - without this, `api.main`
+# fails to import at all.
+requests
 ruff
 pytest
 pytest-asyncio

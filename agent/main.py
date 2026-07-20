@@ -44,16 +44,29 @@ def _on_conversation_loop_done(task: asyncio.Task, *, call_id: str | None, room_
     logger.info("Call ended", extra={"room": room_name, "call_id": call_id, "status": status})
 
 
+_BARGE_IN_GRACE_PERIOD_S = 0.8
+
+
 def _speak(text: str, audio_source: rtc.AudioSource, current_tts: dict) -> asyncio.Task:
     """Starts TTS and records it as the currently-playing utterance, so a
     barge-in can cancel exactly this task (not some earlier finished one)."""
     task = asyncio.create_task(tts.synthesize_to_track(text, audio_source))
     current_tts["task"] = task
+    current_tts["started_at"] = asyncio.get_event_loop().time()
     task.add_done_callback(lambda t: _log_task_exception(t, context="tts"))
     return task
 
 
 def _on_prospect_speech_started(room_name: str, audio_source: rtc.AudioSource, current_tts: dict) -> None:
+    # On slow (CPU-only) hardware, Kokoro can take longer than the ~243ms
+    # barge-in budget to produce its first audio chunk - without this grace
+    # window, ambient mic noise right as a reply starts cancels it before
+    # the prospect ever hears a sound, every time. Once a reply has been
+    # playing past the grace period, cancellation is instant as designed.
+    started_at = current_tts.get("started_at")
+    if started_at is not None and asyncio.get_event_loop().time() - started_at < _BARGE_IN_GRACE_PERIOD_S:
+        return
+
     # The VAD re-fires on every micro-pause within the prospect's own
     # utterance (natural gaps between words), not just once per utterance -
     # only act, and only log, when the agent actually has something playing
@@ -222,5 +235,12 @@ if __name__ == "__main__":
             ws_url=settings.LIVEKIT_URL,
             api_key=settings.LIVEKIT_API_KEY,
             api_secret=settings.LIVEKIT_API_SECRET,
+            # Default 0.7 system-CPU load threshold marks this worker
+            # "unavailable" and LiveKit silently drops dispatch ("no worker
+            # available to handle job") - on this dev machine, ambient load
+            # from unrelated processes sits near/above that on its own, so
+            # real calls were never even reaching the agent. Raised so
+            # dispatch isn't blocked by CPU noise this worker isn't causing.
+            load_threshold=0.95,
         )
     )
