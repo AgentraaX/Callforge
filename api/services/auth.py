@@ -10,6 +10,7 @@ configured, rather than silently no-op.
 """
 import logging
 import os
+import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
 
@@ -19,7 +20,7 @@ from passlib.context import CryptContext
 from sqlalchemy.orm import Session
 
 from api.models import OAuthAccount, User
-from shared.constants import OAUTH_STATE_KEY
+from shared.constants import OAUTH_STATE_KEY, REFRESH_TOKEN_KEY
 from shared.redis_client import get_redis
 
 logger = logging.getLogger("api.services.auth")
@@ -66,7 +67,7 @@ def _jwt_algorithm() -> str:
 
 
 def _jwt_expire_minutes() -> int:
-    return int(os.getenv("JWT_EXPIRE_MINUTES", "60"))
+    return int(os.getenv("JWT_EXPIRE_MINUTES", "15"))
 
 
 def create_access_token(user_id: uuid.UUID, role: str) -> str:
@@ -79,6 +80,46 @@ def decode_access_token(token: str) -> dict:
     """Raises jose.JWTError on an invalid/expired/tampered token - callers
     translate that into a 401, not caught here."""
     return jwt.decode(token, _jwt_secret(), algorithms=[_jwt_algorithm()])
+
+
+# --------------------------------------------------------------------------
+# Refresh tokens
+# --------------------------------------------------------------------------
+#
+# Deliberately not a JWT: a long-lived opaque random string whose only
+# validity check is "does this key still exist in Redis" - so revoking one
+# (logout, rotation) is a single DELETE, not a blacklist that every access
+# token verification would need to consult. Access tokens themselves stay
+# fully stateless/short-lived and are never checked against Redis - that
+# split is the whole point of this design.
+
+def _refresh_token_ttl_seconds() -> int:
+    return int(os.getenv("REFRESH_TOKEN_EXPIRE_DAYS", "30")) * 86400
+
+
+async def issue_refresh_token(user_id: uuid.UUID) -> str:
+    token = secrets.token_urlsafe(32)
+    redis = get_redis()
+    await redis.set(REFRESH_TOKEN_KEY.format(token=token), str(user_id), ex=_refresh_token_ttl_seconds())
+    return token
+
+
+async def rotate_refresh_token(old_token: str) -> tuple[str, uuid.UUID] | None:
+    """Atomically consumes old_token (GETDEL - same single-use pattern as
+    the OAuth CSRF state check above) and issues a new one in its place.
+    Returns (new_token, user_id), or None if old_token wasn't valid -
+    callers map that to a 401."""
+    redis = get_redis()
+    user_id = await redis.getdel(REFRESH_TOKEN_KEY.format(token=old_token))
+    if user_id is None:
+        return None
+    new_token = await issue_refresh_token(uuid.UUID(user_id))
+    return new_token, uuid.UUID(user_id)
+
+
+async def revoke_refresh_token(token: str) -> None:
+    redis = get_redis()
+    await redis.delete(REFRESH_TOKEN_KEY.format(token=token))
 
 
 # --------------------------------------------------------------------------

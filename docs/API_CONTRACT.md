@@ -22,13 +22,42 @@ and the agent both rely on this being current, not the code being "self-document
 ```
 **Response 200:**
 ```json
-{"access_token": "string (JWT)", "token_type": "bearer"}
+{"access_token": "string (JWT, 15 min expiry)", "token_type": "bearer", "refresh_token": "string (opaque, 30 day expiry)"}
 ```
 **Response 401:** `{"detail": "Invalid email or password"}` — returned identically for a
 wrong password and a nonexistent email (see `api/services/auth.py`'s timing-safe
 `verify_password` — a real bcrypt check always runs against a dummy hash even when
 no matching user exists, so response time can't be used to enumerate registered
 emails either).
+
+Access tokens are short-lived and fully stateless (`api/dependencies.py`'s
+`get_current_user` never touches Redis — verified locally on every request).
+Session longevity comes from the refresh token instead, which is opaque
+(not a JWT) and Redis-backed (`auth:refresh:{token}` — see
+`docs/REDIS_SCHEMA.md`).
+
+### POST /auth/refresh
+**Request:**
+```json
+{"refresh_token": "string"}
+```
+**Response 200:** same shape as `POST /auth/login`. The refresh token is
+rotated on every call (old one deleted, new one issued) — reusing a
+refresh token after it's been rotated (or after logout) fails.
+**Response 401:** `{"detail": "Invalid or expired refresh token"}` or
+`{"detail": "User no longer exists"}`.
+
+### POST /auth/logout
+**Request:**
+```json
+{"refresh_token": "string"}
+```
+**Response 204:** no body. Deletes the refresh token from Redis, so it can
+no longer be used to mint new access tokens. Does **not** invalidate any
+access token already issued — by design, those stay valid until their own
+15 min expiry (see the stateless-access-token note above). No
+`Authorization` header is required for this endpoint; possessing the
+refresh token is sufficient.
 
 ### GET /auth/{provider}/login
 `{provider}` must be exactly one of `google`, `github`.
@@ -47,7 +76,7 @@ stub — it is untestable end-to-end only because live credentials don't exist y
 absent if the user declined consent), `state` (string, required — must match
 the value issued by `/login`), `error`/`error_description` (string, present
 instead of `code` if the user declined consent on the provider's screen).
-**Response 200:** same shape as `POST /auth/login`.
+**Response 200:** same shape as `POST /auth/login` (access token + refresh token).
 **Response 400:** `{"detail": "Invalid provider. ..."}` (bad `{provider}`),
 `{"detail": "OAuth state is invalid, expired, or already used"}` (state's
 10 min TTL elapsed, or it was already consumed — see `/login` above),
