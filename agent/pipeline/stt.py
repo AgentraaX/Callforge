@@ -19,12 +19,28 @@ CHUNK_SECONDS = 2.0
 
 _executor = ThreadPoolExecutor(max_workers=1)
 
+# Biases the decoder toward vocabulary/spellings expected on these calls
+# (product name, qualification terminology) - doesn't guarantee an unseen
+# prospect name transcribes correctly, but raises its odds by shaping the
+# decoder's prior instead of leaving it fully generic.
+_INITIAL_PROMPT = (
+    "CallForge sales call. Terms that may come up: budget, authority, need, "
+    "timeline, pricing, demo, onboarding, integration, subscription, "
+    "enterprise, procurement, stakeholder, renewal."
+)
+
 
 class WhisperSTT:
-    # Day 14: tiny.en measured ~1.7x faster than base.en (1064ms vs 1843ms
-    # mean, n=5) with an identical transcript on our test audio - real win,
-    # not just a smaller/riskier model swapped in blind.
-    def __init__(self, model_size: str = "tiny.en") -> None:
+    # Day 14 benchmarked tiny.en as ~1.7x faster than base.en (1064ms vs
+    # 1843ms mean, n=5) with an identical transcript on that test audio -
+    # but a live call today had tiny.en fail to transcribe a prospect's
+    # name ("Elon Musk" -> "that all must be"), retrying through all 6
+    # fallback temperatures (0.0-1.0) without ever meeting its own
+    # confidence threshold. tiny.en's capacity just isn't enough for
+    # less-common proper nouns. Moved up to base.en for the accuracy;
+    # ~1.7x slower per the same Day 14 numbers, so worth watching on this
+    # CPU-only box if STT latency becomes the bottleneck instead.
+    def __init__(self, model_size: str = "base.en") -> None:
         logger.info("Loading Whisper model", extra={"model_size": model_size})
         self._model = WhisperModel(model_size, device="cpu", compute_type="int8")
 
@@ -33,7 +49,9 @@ class WhisperSTT:
         return await loop.run_in_executor(_executor, self._transcribe_sync, audio)
 
     def _transcribe_sync(self, audio: np.ndarray) -> str:
-        segments, _ = self._model.transcribe(audio, language="en", beam_size=1, vad_filter=True)
+        segments, _ = self._model.transcribe(
+            audio, language="en", beam_size=1, vad_filter=True, initial_prompt=_INITIAL_PROMPT
+        )
         return " ".join(seg.text.strip() for seg in segments).strip()
 
     async def transcribe_track(self, track: rtc.Track):
