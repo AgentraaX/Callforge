@@ -13,12 +13,12 @@ from dotenv import load_dotenv
 # luck silently ran out and DB/LiveKit/etc. fell back to hardcoded defaults).
 load_dotenv()
 
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from apscheduler.triggers.cron import CronTrigger
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
-from api.routers import analytics, auth, briefing, calls, campaigns, contact, demo, leads
-from api.services.briefing import send_daily_briefing
+from apscheduler.schedulers.asyncio import AsyncIOScheduler  # noqa: E402
+from apscheduler.triggers.cron import CronTrigger  # noqa: E402
+from fastapi import FastAPI  # noqa: E402
+from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
+from api.routers import analytics, auth, briefing, calls, campaigns, contact, demo, leads  # noqa: E402
+from api.services.briefing import send_daily_briefing  # noqa: E402
 
 
 @asynccontextmanager
