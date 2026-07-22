@@ -70,7 +70,13 @@ def create_listener_token(room_name: str, identity: str, ttl: timedelta = DEFAUL
 
 
 def livekit_url() -> str:
-    url, _, _ = _livekit_credentials()
+    """Public/browser-facing LiveKit URL - the client connects to this
+    directly from outside Docker's network, so it must be the
+    host-mapped address, not the internal ws://livekit:7880 used for
+    server-to-server calls in create_room()."""
+    url = os.getenv("LIVEKIT_PUBLIC_URL", "")
+    if not url:
+        raise RuntimeError("LIVEKIT_PUBLIC_URL not set")
     return url
 
 

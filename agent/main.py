@@ -242,5 +242,27 @@ if __name__ == "__main__":
             # real calls were never even reaching the agent. Raised so
             # dispatch isn't blocked by CPU noise this worker isn't causing.
             load_threshold=0.95,
+            # Default 10s initialize_process_timeout assumes near-instant
+            # process startup - on this CPU-only box, loading Whisper +
+            # Kokoro into a freshly spawned process takes 45-90s, so every
+            # prewarmed process was timing out and getting killed/respawned
+            # in an infinite loop (confirmed via repeated "Loading Whisper
+            # model" + TimeoutError pairs in the logs). Raised to give slow
+            # CPU model loads room to finish.
+            initialize_process_timeout=180.0,
+            # Default prod num_idle_processes=4 spawns 4 processes at once,
+            # each loading Whisper+Kokoro concurrently - on this 4-CPU box
+            # that contention made every load even slower, compounding the
+            # timeout above. One warm spare is enough for a single dev
+            # machine handling one call at a time.
+            num_idle_processes=1,
+            # Default 10s shutdown_process_timeout assumes near-instant
+            # cleanup - on this CPU-only box the job process doesn't
+            # actually exit within that window after a room disconnect
+            # (confirmed: logs "process exiting, reason: parent process
+            # shutdown" but is still SIGUSR1-killed 10s later, exit code
+            # -10). Raised to match initialize_process_timeout's same
+            # CPU-only slack rather than force-kill every call's cleanup.
+            shutdown_process_timeout=90.0,
         )
     )

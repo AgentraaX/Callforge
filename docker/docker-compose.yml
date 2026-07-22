@@ -47,6 +47,8 @@ services:
       # passes through unchanged via env_file above.
       DATABASE_URL: postgresql://postgres:postgres@postgres:5432/callforge
       REDIS_URL: redis://redis:6379/0
+      LIVEKIT_PUBLIC_URL: ws://localhost:7980
+      LIVEKIT_URL: ws://livekit:7880
 
   agent:
     build:
@@ -61,6 +63,7 @@ services:
     environment:
       DATABASE_URL: postgresql://postgres:postgres@postgres:5432/callforge
       REDIS_URL: redis://redis:6379/0
+      LIVEKIT_PUBLIC_URL: ws://localhost:7980
       LIVEKIT_URL: ws://livekit:7880
       # Ollama runs natively on the host (not in this compose stack) - not
       # reachable via "localhost" from inside a container. host.docker.internal
