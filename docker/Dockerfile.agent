@@ -8,9 +8,6 @@ WORKDIR /app
 # "g++: No such file or directory" without it. Confirmed by reproducing it.
 RUN apt-get update && apt-get install -y --no-install-recommends g++ && rm -rf /var/lib/apt/lists/*
 
-COPY agent/ ./agent/
-COPY api/ ./api/
-COPY shared/ ./shared/
 COPY requirements-agent.txt .
 
 # chatterbox-tts -> pkuseg==0.0.25 also ships a legacy setup.py that does
@@ -36,5 +33,9 @@ RUN pip install --no-cache-dir torch==2.6.0 torchaudio==2.6.0 --index-url https:
 
 RUN pip install --no-cache-dir -r requirements-agent.txt
 
+COPY agent/ ./agent/
+COPY api/ ./api/
+COPY shared/ ./shared/
+
 WORKDIR /app/agent
-CMD ["python", "main.py"]
+CMD ["python", "main.py", "start"]
