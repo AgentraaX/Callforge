@@ -15,12 +15,15 @@ from sqlalchemy.orm import Session
 from api.db.session import get_db
 from api.dependencies import get_current_user
 from api.models import User
-from api.schemas.auth import LoginRequest, TokenResponse, UserCreate, UserOut
+from api.schemas.auth import LoginRequest, RefreshRequest, TokenResponse, UserCreate, UserOut
 from api.services.auth import (
     build_authorization_url,
     create_access_token,
     exchange_code_for_user,
     hash_password,
+    issue_refresh_token,
+    revoke_refresh_token,
+    rotate_refresh_token,
     verify_password,
 )
 
@@ -51,7 +54,7 @@ def register(payload: UserCreate, db: Session = Depends(get_db)):
 
 
 @router.post("/login", response_model=TokenResponse)
-def login(payload: LoginRequest, db: Session = Depends(get_db)):
+async def login(payload: LoginRequest, db: Session = Depends(get_db)):
     user = db.query(User).filter(User.email == payload.email).first()
 
     # Timing-safe: verify_password always runs a real bcrypt check, even
@@ -62,8 +65,36 @@ def login(payload: LoginRequest, db: Session = Depends(get_db)):
     if user is None or not verify_password(payload.password, password_hash):
         raise HTTPException(status_code=401, detail="Invalid email or password")
 
-    token = create_access_token(user.id, user.role)
-    return TokenResponse(access_token=token)
+    access_token = create_access_token(user.id, user.role)
+    refresh_token = await issue_refresh_token(user.id)
+    return TokenResponse(access_token=access_token, refresh_token=refresh_token)
+
+
+@router.post("/refresh", response_model=TokenResponse)
+async def refresh(payload: RefreshRequest, db: Session = Depends(get_db)):
+    result = await rotate_refresh_token(payload.refresh_token)
+    if result is None:
+        raise HTTPException(status_code=401, detail="Invalid or expired refresh token")
+
+    new_refresh_token, user_id = result
+    # Re-fetched fresh rather than trusting anything cached in Redis, so a
+    # role change or deletion takes effect on the very next refresh instead
+    # of staying baked into tokens issued under a stale identity.
+    user = db.get(User, user_id)
+    if user is None:
+        raise HTTPException(status_code=401, detail="User no longer exists")
+
+    access_token = create_access_token(user.id, user.role)
+    return TokenResponse(access_token=access_token, refresh_token=new_refresh_token)
+
+
+@router.post("/logout", status_code=204)
+async def logout(payload: RefreshRequest):
+    # Only revokes the refresh token, so future /auth/refresh calls fail -
+    # any access token already issued stays valid until its own short
+    # expiry (by design: access tokens are stateless and never checked
+    # against Redis, see api/services/auth.py's refresh-token section).
+    await revoke_refresh_token(payload.refresh_token)
 
 
 @router.get("/me", response_model=UserOut)
@@ -111,5 +142,6 @@ async def oauth_callback(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-    token = create_access_token(user.id, user.role)
-    return TokenResponse(access_token=token)
+    access_token = create_access_token(user.id, user.role)
+    refresh_token = await issue_refresh_token(user.id)
+    return TokenResponse(access_token=access_token, refresh_token=refresh_token)

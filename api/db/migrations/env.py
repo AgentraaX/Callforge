@@ -22,7 +22,7 @@ target_metadata = Base.metadata
 
 # Override the DB URL from environment, falling back to alembic.ini's value
 DATABASE_URL = os.getenv(
-    "DATABASE_URL", "postgresql://postgres:postgres@localhost:5432/callforge"
+    "DATABASE_URL", "postgresql://postgres:postgres@localhost:5433/callforge"
 )
 config.set_main_option("sqlalchemy.url", DATABASE_URL)
 

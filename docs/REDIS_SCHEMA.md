@@ -15,6 +15,7 @@ backend dev before merge, not after.
 | `briefing:sent:{date}` | API (P4, `api/services/briefing.py`) | API (P4) — idempotency lock, not meant to be read elsewhere | 2 days |
 | `crm:webhook:failed` | Agent (P3, via `agent/call_lifecycle.py` → `api/services/crm.py`) | API/agent (P4/P3) — drained by `retry_failed_webhooks()` | Until delivered |
 | `oauth:state:{state}` | API (P4, `api/services/auth.py`, on `GET /auth/{provider}/login`) | API (P4) — single-use CSRF check on `GET /auth/{provider}/callback`, deleted on read via `GETDEL` | 10 min |
+| `auth:refresh:{token}` | API (P4, `api/services/auth.py`, on `/auth/login`, `/{provider}/callback`, `/auth/refresh`) | API (P4) — `/auth/refresh` (rotates via `GETDEL` + reissue), `/auth/logout` (deletes) | 30 days, reset on each rotation |
 
 Key templates live in `shared/constants.py` — import them, don't hardcode key strings.
 
@@ -51,3 +52,21 @@ attempts (1s/2s/4s backoff) — `retry_failed_webhooks()` drains it FIFO,
 re-attempting each; a still-failing payload gets pushed back and drains
 stop for that call (no busy-loop against a CRM that's still down). No TTL —
 an undelivered outcome must not silently expire and vanish.
+
+## Auth addition — refresh tokens (hybrid access/refresh model)
+
+`auth:refresh:{token}` is the source of truth for a login session; the
+value is the owning user's id, plain string. Rotated on every
+`/auth/refresh` call: the old key is consumed via `GETDEL` (same
+single-use pattern as `oauth:state:{state}`) and a new key/token pair
+issued in its place, TTL reset to the full 30 days. `/auth/logout`
+deletes the key outright.
+
+Deliberately asymmetric with access tokens: a JWT access token (15 min
+default, `JWT_EXPIRE_MINUTES`) is verified locally in
+`api/dependencies.py::get_current_user` and never touches Redis - only
+`/auth/login`, `/{provider}/callback`, `/auth/refresh`, and
+`/auth/logout` read or write this key. This means a revoked refresh
+token stops new access tokens from being minted, but any access token
+already issued remains valid until its own expiry - by design, not a
+gap to close.

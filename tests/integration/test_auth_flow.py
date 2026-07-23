@@ -81,7 +81,9 @@ async def main() -> None:
         r3 = await client.post("/auth/login", json={"email": TEST_EMAIL, "password": TEST_PASSWORD})
         _check("returns 200", r3.status_code == 200, f"got {r3.status_code}: {r3.text}")
         token = r3.json().get("access_token")
+        refresh_token = r3.json().get("refresh_token")
         _check("access_token present", bool(token))
+        _check("refresh_token present", bool(refresh_token))
         if token and created_user_id is not None:
             decoded = jwt.decode(token, _jwt_secret(), algorithms=[_jwt_algorithm()])
             _check("JWT sub matches the created user's id", decoded.get("sub") == str(created_user_id))
@@ -101,7 +103,58 @@ async def main() -> None:
             f"wrong-password body: {r4.json()!r}, nonexistent-email body: {r5.json()!r}",
         )
 
-    print("\n6. Cleanup: deleting test user from DB")
+        # Access tokens carry no jti (by design - see api/services/auth.py),
+        # so their payload is just {sub, role, exp} with exp at second
+        # granularity. Refreshing in the same wall-clock second as login
+        # would mint a byte-identical JWT (same payload -> same HMAC
+        # signature), which isn't what's under test here - the delay
+        # guarantees a genuinely later exp instead of relying on the two
+        # calls happening to straddle a second boundary.
+        await asyncio.sleep(1)
+
+        print("\n6. POST /auth/refresh (valid refresh token)")
+        r6 = await client.post("/auth/refresh", json={"refresh_token": refresh_token})
+        _check("returns 200", r6.status_code == 200, f"got {r6.status_code}: {r6.text}")
+        new_token = r6.json().get("access_token")
+        new_refresh_token = r6.json().get("refresh_token")
+        _check("new access_token present", bool(new_token))
+        _check("new refresh_token present", bool(new_refresh_token))
+        _check("new access_token differs from the original", new_token != token)
+        _check("new refresh_token differs from the original (rotated)", new_refresh_token != refresh_token)
+
+        print("\n7. POST /auth/refresh (reusing the OLD, already-rotated refresh token)")
+        r7 = await client.post("/auth/refresh", json={"refresh_token": refresh_token})
+        _check(
+            "old refresh token rejected with 401 - rotation actually invalidated it",
+            r7.status_code == 401,
+            f"got {r7.status_code}: {r7.text}",
+        )
+
+        print("\n8. POST /auth/logout (current refresh token)")
+        r8 = await client.post("/auth/logout", json={"refresh_token": new_refresh_token})
+        _check("returns 204", r8.status_code == 204, f"got {r8.status_code}: {r8.text}")
+
+        print("\n9. POST /auth/refresh (refresh token that was just logged out)")
+        r9 = await client.post("/auth/refresh", json={"refresh_token": new_refresh_token})
+        _check(
+            "logged-out refresh token rejected with 401",
+            r9.status_code == 401,
+            f"got {r9.status_code}: {r9.text}",
+        )
+
+        print("\n10. GET /auth/me with the access token issued before logout")
+        # By design, not a bug: access tokens are stateless and never
+        # checked against Redis (see api/services/auth.py) - logout only
+        # revokes the refresh token, so any access token already issued
+        # keeps working until its own short (15 min) expiry.
+        r10 = await client.get("/auth/me", headers={"Authorization": f"Bearer {new_token}"})
+        _check(
+            "pre-logout access token still works until its own expiry (expected, not a bug)",
+            r10.status_code == 200,
+            f"got {r10.status_code}: {r10.text}",
+        )
+
+    print("\n11. Cleanup: deleting test user from DB")
     db = SessionLocal()
     try:
         deleted = db.query(User).filter(User.email == TEST_EMAIL).delete()
