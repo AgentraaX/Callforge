@@ -15,6 +15,16 @@ class LoginRequest(BaseModel):
     password: str
 
 
+class SendVerificationCodeRequest(BaseModel):
+    email: str
+    password: str
+
+
+class VerifyCodeRequest(BaseModel):
+    email: str
+    code: str
+
+
 class UserOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

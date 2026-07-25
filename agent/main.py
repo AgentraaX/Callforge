@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import logging
 
 from livekit import rtc
@@ -33,11 +34,12 @@ def _log_task_exception(task: asyncio.Task, *, context: str) -> None:
         logger.error("Background task failed", extra={"context": context}, exc_info=exc)
 
 
-def _on_conversation_loop_done(task: asyncio.Task, *, call_id: str | None, room_name: str, call_finished: dict) -> None:
+def _on_conversation_loop_done(task: asyncio.Task, *, call_state: dict, room_name: str, call_finished: dict) -> None:
     _log_task_exception(task, context="conversation_loop")
     if task.cancelled():
         return
     call_finished["done"] = True
+    call_id = call_state["call_id"]
     status = "failed" if task.exception() is not None else "completed"
     finish_task = asyncio.create_task(set_call_status(call_id, status))
     finish_task.add_done_callback(lambda t: _log_task_exception(t, context="call_status_finish"))
@@ -101,26 +103,13 @@ async def _call_job(ctx: JobContext) -> None:
 
     audio_source = rtc.AudioSource(sample_rate=SAMPLE_RATE, num_channels=1)
     audio_track = rtc.LocalAudioTrack.create_audio_track("agent-voice", audio_source)
-    await ctx.room.local_participant.publish_track(
-        audio_track, rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE)
-    )
-    logger.info("Published agent audio track", extra={"room": ctx.room.name})
-
-    # Assigned once, before anything is spoken, so the A/B variant actually
-    # decides the opening line the prospect hears - not just background
-    # context for later turns.
-    variant = await assign_variant_for_room(ctx.room.name)
-    pitch = variant["pitch"] if variant else None
-    opening_line = pitch or "Hello, this is the CallForge assistant, checking that the voice pipeline works."
-
-    # None for inbound test rooms (no "outbound-{lead_id}" room-name
-    # convention to resolve) - every downstream call_lifecycle call already
-    # no-ops cleanly on None, same as enrichment/ab_testing's lookups.
-    call_id = await resolve_call_id_for_room(ctx.room.name)
-    await set_call_status(call_id, "active")
 
     current_tts: dict = {"task": None}  # per-call, local scope - tracks whichever utterance is playing right now
-    _speak(opening_line, audio_source, current_tts)
+    # pitch/call_id aren't known until the awaits below (real DB/Redis
+    # round-trips) resolve - held in a mutable dict so the event handlers
+    # registered right now can still reference them once populated.
+    call_state: dict = {"pitch": None, "call_id": None}
+    setup_done = asyncio.Event()
 
     # Only set once, by whichever of {conversation loop ends, room
     # disconnects} happens first - so an abrupt disconnect after a normal
@@ -128,6 +117,13 @@ async def _call_job(ctx: JobContext) -> None:
     # forth.
     call_finished: dict = {"done": False}
 
+    # Registered before publishing our own track or awaiting the variant/
+    # call-id lookups below, not after - the prospect's browser can
+    # publish its mic fast enough to have its track subscribed before
+    # those DB/Redis round-trips finish. Registering late meant that
+    # subscription event could fire with nothing listening yet: the agent
+    # would speak its opening line and then never hear anything for the
+    # rest of the call, silently, with no error anywhere.
     @ctx.room.on("track_subscribed")
     def on_track_subscribed(track: rtc.Track, publication, participant) -> None:
         if track.kind != rtc.TrackKind.KIND_AUDIO:
@@ -137,11 +133,11 @@ async def _call_job(ctx: JobContext) -> None:
             extra={"room": ctx.room.name, "participant": participant.identity},
         )
         transcribe_task = asyncio.create_task(
-            _conversation_loop(ctx, track, audio_source, pitch, current_tts, call_id)
+            _conversation_loop(ctx, track, audio_source, current_tts, call_state, setup_done)
         )
         transcribe_task.add_done_callback(
             lambda t: _on_conversation_loop_done(
-                t, call_id=call_id, room_name=ctx.room.name, call_finished=call_finished
+                t, call_state=call_state, room_name=ctx.room.name, call_finished=call_finished
             )
         )
 
@@ -160,47 +156,105 @@ async def _call_job(ctx: JobContext) -> None:
             return
         call_finished["done"] = True
         logger.warning("Room disconnected with no completed conversation loop", extra={"room": ctx.room.name})
-        task = asyncio.create_task(set_call_status(call_id, "failed"))
+        task = asyncio.create_task(set_call_status(call_state["call_id"], "failed"))
         task.add_done_callback(lambda t: _log_task_exception(t, context="call_status_disconnect"))
+
+    await ctx.room.local_participant.publish_track(
+        audio_track, rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE)
+    )
+    logger.info("Published agent audio track", extra={"room": ctx.room.name})
+
+    # Assigned once, before anything is spoken, so the A/B variant actually
+    # decides the opening line the prospect hears - not just background
+    # context for later turns.
+    variant = await assign_variant_for_room(ctx.room.name)
+    call_state["pitch"] = variant["pitch"] if variant else None
+    opening_line = (
+        call_state["pitch"] or "Hello, this is the CallForge assistant, checking that the voice pipeline works."
+    )
+
+    # None for inbound test rooms (no "outbound-{lead_id}" room-name
+    # convention to resolve) - every downstream call_lifecycle call already
+    # no-ops cleanly on None, same as enrichment/ab_testing's lookups.
+    call_state["call_id"] = await resolve_call_id_for_room(ctx.room.name)
+    await set_call_status(call_state["call_id"], "active")
+
+    _speak(opening_line, audio_source, current_tts)
+    setup_done.set()
 
 
 async def _conversation_loop(
     ctx: JobContext,
     track: rtc.Track,
     audio_source: rtc.AudioSource,
-    pitch: str | None,
     current_tts: dict,
-    call_id: str | None,
+    call_state: dict,
+    setup_done: asyncio.Event,
 ) -> None:
+    # STT must keep draining the prospect's mic track continuously, even
+    # while the agent is mid-reply - an async generator is paused at its
+    # `yield` between iterations, so awaiting the reply before asking for
+    # the next transcript left whatever the prospect said during that
+    # window stuck unprocessed until the reply finished, then flushed as
+    # one stale, mistimed batch (this is what "responses are answering the
+    # wrong thing" was - not an STT accuracy issue). Pumping transcripts
+    # through a queue on their own task decouples listening from speaking
+    # so both run concurrently, same as the barge-in watcher already does.
+    #
+    # Started immediately, before waiting on setup_done below, so nothing
+    # the prospect says during _call_job's own DB/Redis setup calls is
+    # lost - it just queues until the loop below is ready to process it.
+    transcripts: asyncio.Queue[str | None] = asyncio.Queue()
+
+    async def _pump_transcripts() -> None:
+        async for text in stt.transcribe_track(track):
+            await transcripts.put(text)
+        await transcripts.put(None)  # sentinel: track ended, nothing more is coming
+
+    pump_task = asyncio.create_task(_pump_transcripts())
+    pump_task.add_done_callback(lambda t: _log_task_exception(t, context="stt_pump"))
+
+    await setup_done.wait()
+    pitch = call_state["pitch"]
+    call_id = call_state["call_id"]
+
     enrichment = await get_enrichment_for_room(ctx.room.name)
     if enrichment:
         logger.info("Loaded lead enrichment", extra={"room": ctx.room.name, "enrichment": enrichment})
 
-    async for text in stt.transcribe_track(track):
-        logger.info("Transcript", extra={"room": ctx.room.name, "text": text})
-        await persist_transcript_turn(call_id, "prospect", text)
+    try:
+        while True:
+            text = await transcripts.get()
+            if text is None:
+                break
+            logger.info("Transcript", extra={"room": ctx.room.name, "text": text})
+            await persist_transcript_turn(call_id, "prospect", text)
 
-        note = await read_and_clear_manager_note(ctx.room.name)
-        if note:
-            logger.info("Applying manager whisper note", extra={"room": ctx.room.name, "note": note})
+            note = await read_and_clear_manager_note(ctx.room.name)
+            if note:
+                logger.info("Applying manager whisper note", extra={"room": ctx.room.name, "note": note})
 
-        decision = await llm.generate(text, enrichment=enrichment, manager_note=note, pitch=pitch)
-        logger.info(
-            "LLM decision",
-            extra={"room": ctx.room.name, "action": decision.action, "reply": decision.message},
-        )
-        # TODO(Day 6/joint with P4): route decision.action through graph/state_machine.py
-        # instead of always just speaking decision.message
+            decision = await llm.generate(text, enrichment=enrichment, manager_note=note, pitch=pitch)
+            logger.info(
+                "LLM decision",
+                extra={"room": ctx.room.name, "action": decision.action, "reply": decision.message},
+            )
+            # TODO(Day 6/joint with P4): route decision.action through graph/state_machine.py
+            # instead of always just speaking decision.message
 
-        if decision.message:
-            await persist_transcript_turn(call_id, "agent", decision.message)
-            reply_task = _speak(decision.message, audio_source, current_tts)
-            try:
-                await reply_task
-            except asyncio.CancelledError:
-                # Barge-in cancelled this specific reply - the conversation
-                # loop itself keeps running to hear what the prospect said.
-                logger.info("Reply interrupted by barge-in", extra={"room": ctx.room.name})
+            if decision.message:
+                await persist_transcript_turn(call_id, "agent", decision.message)
+                reply_task = _speak(decision.message, audio_source, current_tts)
+                try:
+                    await reply_task
+                except asyncio.CancelledError:
+                    # Barge-in cancelled this specific reply - the conversation
+                    # loop itself keeps running to hear what the prospect said.
+                    logger.info("Reply interrupted by barge-in", extra={"room": ctx.room.name})
+    finally:
+        pump_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await pump_task
 
 
 async def _whisper_job(ctx: JobContext) -> None:
@@ -254,7 +308,12 @@ if __name__ == "__main__":
             # each loading Whisper+Kokoro concurrently - on this 4-CPU box
             # that contention made every load even slower, compounding the
             # timeout above. One warm spare is enough for a single dev
-            # machine handling one call at a time.
+            # machine handling one call at a time. Also fixes dev mode's
+            # own default of 0 idle processes, which left every call
+            # spinning up a brand-new subprocess from scratch - slow enough
+            # that the prospect's mic track subscription could be missed
+            # entirely (call played the opening line, then never actually
+            # started listening).
             num_idle_processes=1,
             # Default 10s shutdown_process_timeout assumes near-instant
             # cleanup - on this CPU-only box the job process doesn't

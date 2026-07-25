@@ -15,13 +15,28 @@ from sqlalchemy.orm import Session
 from api.db.session import get_db
 from api.dependencies import get_current_user
 from api.models import User
-from api.schemas.auth import LoginRequest, TokenResponse, UserCreate, UserOut
+from api.schemas.auth import (
+    LoginRequest,
+    SendVerificationCodeRequest,
+    TokenResponse,
+    UserCreate,
+    UserOut,
+    VerifyCodeRequest,
+)
 from api.services.auth import (
     build_authorization_url,
     create_access_token,
     exchange_code_for_user,
     hash_password,
+    validate_password_strength,
     verify_password,
+)
+from api.services.email_verification import (
+    consume_pending_registration,
+    generate_verification_code,
+    get_pending_registration,
+    send_verification_email,
+    store_pending_registration,
 )
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -48,6 +63,59 @@ def register(payload: UserCreate, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(user)
     return user
+
+
+@router.post("/register/send-code", status_code=200)
+async def send_registration_code(payload: SendVerificationCodeRequest, db: Session = Depends(get_db)):
+    """Step 1 of email-verified signup: validate email/password up front (same
+    checks /register applies) and email a 6-digit code, without creating a
+    User yet - the account is only created once verify-code confirms it."""
+    existing = db.query(User).filter(User.email == payload.email).first()
+    if existing is not None:
+        raise HTTPException(status_code=409, detail="Email already registered")
+
+    password_error = validate_password_strength(payload.password)
+    if password_error:
+        raise HTTPException(status_code=400, detail=password_error)
+
+    code = generate_verification_code()
+    await store_pending_registration(payload.email, hash_password(payload.password), code)
+
+    try:
+        await send_verification_email(payload.email, code)
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+
+    return {"detail": "Verification code sent"}
+
+
+@router.post("/register/verify-code", response_model=TokenResponse, status_code=201)
+async def verify_registration_code(payload: VerifyCodeRequest, db: Session = Depends(get_db)):
+    """Step 2: confirm the code, create the User (finally persisting the
+    password hash that's been sitting in Redis since send-code), and log
+    them straight in - same behavior /register's callers already expect."""
+    pending = await get_pending_registration(payload.email)
+    if pending is None:
+        raise HTTPException(status_code=400, detail="Code expired or not requested. Please request a new code.")
+    if pending["code"] != payload.code:
+        raise HTTPException(status_code=400, detail="Invalid verification code")
+
+    consumed = await consume_pending_registration(payload.email)
+    if consumed is None:
+        # Consumed by a concurrent request between the check above and here.
+        raise HTTPException(status_code=400, detail="Code expired or not requested. Please request a new code.")
+
+    existing = db.query(User).filter(User.email == payload.email).first()
+    if existing is not None:
+        raise HTTPException(status_code=409, detail="Email already registered")
+
+    user = User(email=payload.email, password_hash=consumed["password_hash"])
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+
+    token = create_access_token(user.id, user.role)
+    return TokenResponse(access_token=token)
 
 
 @router.post("/login", response_model=TokenResponse)

@@ -1,7 +1,11 @@
 """Speech-to-text: faster-whisper wrapper streamed from a LiveKit audio track.
 
-Chunk-based (fixed window), not silence-triggered — Day 12's VAD work
-replaces this with real utterance boundaries and barge-in support.
+Silence-triggered utterance segmentation, not a fixed window - transcribes
+as soon as the prospect stops talking instead of waiting for an arbitrary
+buffer to fill (the old fixed 2s window added up to 2s of pure buffering
+latency before STT even started). Uses the same lightweight RMS-energy
+check as vad.py's barge-in detector, just watching for the END of speech
+instead of the start.
 """
 
 import asyncio
@@ -15,7 +19,29 @@ from livekit import rtc
 logger = logging.getLogger("agent.pipeline.stt")
 
 SAMPLE_RATE = 16000
-CHUNK_SECONDS = 2.0
+
+# Deliberately NOT the same value as vad.py's barge-in threshold, despite
+# both being RMS checks on the same audio - they have opposite failure
+# costs. Barge-in false-triggering on noise cancels a reply outright, so
+# it needs to be strict (1800). This threshold gates "is this frame part
+# of the utterance I'm buffering" - set it too high and ordinary quieter
+# syllables/consonants momentarily drop below it mid-sentence, which
+# _SILENCE_MS then reads as the utterance ending, chopping a single
+# sentence into multiple fragments sent to the LLM out of context (this
+# is what caused "Elon Musk worth in numbers." / "in a trillion or
+# billion and finally." to arrive as two unrelated turns instead of one
+# question). Keep this sensitive; let _SILENCE_MS's duration do the work
+# of not cutting on brief pauses.
+_ENERGY_THRESHOLD = 500.0
+# How much trailing silence confirms the utterance actually ended, vs. a
+# brief mid-sentence pause. Long enough to tolerate natural pauses
+# between words/clauses without fragmenting a sentence.
+_SILENCE_MS = 700.0
+# Safety cap: flush even without silence after this long, so one
+# continuous utterance (or sustained noise) can't buffer forever.
+_MAX_UTTERANCE_SECONDS = 12.0
+# Don't bother calling Whisper on a couple of frames of noise/click.
+_MIN_UTTERANCE_SECONDS = 0.3
 
 _executor = ThreadPoolExecutor(max_workers=1)
 
@@ -55,23 +81,42 @@ class WhisperSTT:
         return " ".join(seg.text.strip() for seg in segments).strip()
 
     async def transcribe_track(self, track: rtc.Track):
-        """Yield transcribed text in fixed ~2s chunks from a room audio track."""
+        """Yield transcribed text as soon as the prospect pauses, instead of
+        waiting for a fixed-size buffer to fill."""
         stream = rtc.AudioStream(track, sample_rate=SAMPLE_RATE, num_channels=1)
-        chunk_samples = int(SAMPLE_RATE * CHUNK_SECONDS)
-        buffer = np.empty(0, dtype=np.int16)
+        utterance = np.empty(0, dtype=np.int16)
+        silence_ms = 0.0
+        speaking = False
 
         try:
             async for event in stream:
                 samples = np.frombuffer(event.frame.data, dtype=np.int16)
-                buffer = np.concatenate([buffer, samples])
+                if len(samples) == 0:
+                    continue
+                frame_ms = len(samples) / SAMPLE_RATE * 1000.0
 
-                while len(buffer) >= chunk_samples:
-                    chunk, buffer = buffer[:chunk_samples], buffer[chunk_samples:]
-                    peak = int(np.abs(chunk).max()) if len(chunk) else 0
-                    logger.info("Audio chunk level", extra={"peak_amplitude": peak, "of_max": 32768})
-                    audio = chunk.astype(np.float32) / 32768.0
-                    text = await self._transcribe(audio)
-                    if text:
-                        yield text
+                rms = float(np.sqrt(np.mean(samples.astype(np.float32) ** 2)))
+                if rms > _ENERGY_THRESHOLD:
+                    speaking = True
+                    silence_ms = 0.0
+                    utterance = np.concatenate([utterance, samples])
+                elif speaking:
+                    silence_ms += frame_ms
+                    utterance = np.concatenate([utterance, samples])
+
+                utterance_seconds = len(utterance) / SAMPLE_RATE
+                should_flush = speaking and (
+                    silence_ms >= _SILENCE_MS or utterance_seconds >= _MAX_UTTERANCE_SECONDS
+                )
+
+                if should_flush:
+                    speaking = False
+                    silence_ms = 0.0
+                    if utterance_seconds >= _MIN_UTTERANCE_SECONDS:
+                        audio = utterance.astype(np.float32) / 32768.0
+                        text = await self._transcribe(audio)
+                        if text:
+                            yield text
+                    utterance = np.empty(0, dtype=np.int16)
         finally:
             await stream.aclose()

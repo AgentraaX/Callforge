@@ -10,6 +10,7 @@ configured, rather than silently no-op.
 """
 import logging
 import os
+import re
 import uuid
 from datetime import datetime, timedelta, timezone
 
@@ -48,6 +49,22 @@ def verify_password(password: str, password_hash: str | None) -> bool:
     is None (OAuth-only account) or the caller already knows the user
     doesn't exist - verifying against _DUMMY_HASH keeps the cost identical."""
     return _pwd_context.verify(password, password_hash or _DUMMY_HASH)
+
+
+def validate_password_strength(password: str) -> str | None:
+    """Mirrors the frontend's own check (components/signup/signup-form.tsx) -
+    the frontend blocks weak passwords before this is ever hit, but the
+    email-verification-code flow shouldn't trust the client alone since a
+    valid session doesn't exist yet at this point in registration."""
+    if len(password) < 8:
+        return "Password must be at least 8 characters long."
+    if not re.search(r"[A-Z]", password):
+        return "Password must contain at least one uppercase letter."
+    if not re.search(r"[0-9]", password):
+        return "Password must contain at least one number."
+    if not re.search(r"[^A-Za-z0-9]", password):
+        return "Password must contain at least one special character."
+    return None
 
 
 # --------------------------------------------------------------------------

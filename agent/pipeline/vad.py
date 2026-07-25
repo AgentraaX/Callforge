@@ -19,11 +19,16 @@ SAMPLE_RATE = 16000
 
 # int16 RMS threshold for "this frame has speech-level energy", and how
 # many *consecutive* frames must clear it before we call it real speech
-# rather than a click/pop. Frames are ~20ms, so 3 in a row is ~60ms of
-# confirmation - well inside the ~300ms budget even with the callback's
-# own overhead on top.
-_ENERGY_THRESHOLD = 500.0
-_CONFIRM_FRAMES = 3
+# rather than a click/pop. Frames are ~20ms, so 5 in a row is ~100ms of
+# confirmation - still well inside the ~300ms budget even with the
+# callback's own overhead on top.
+#
+# Raised from 500/3: with earbuds (acoustic echo ruled out), 500 was
+# still tripping on ordinary mic self-noise / room ambience a couple of
+# seconds into nearly every reply, cancelling it before the prospect ever
+# heard it - the barge-in was firing on background noise, not real speech.
+_ENERGY_THRESHOLD = 1800.0
+_CONFIRM_FRAMES = 5
 
 
 class BargeInDetector:

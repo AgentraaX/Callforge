@@ -9,7 +9,12 @@ import os
 
 import redis.asyncio as redis
 
-REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+# Read lazily inside get_redis(), not at module import time - some callers
+# (e.g. agent/main.py, via ab_testing.py) import this module before their
+# own load_dotenv() has run, which would otherwise silently lock in the
+# "REDIS_URL not set yet" default for the rest of the process.
+def _redis_url() -> str:
+    return os.getenv("REDIS_URL", "redis://localhost:6379/0")
 
 # Keyed by event loop, not a single global — an asyncio Redis connection is
 # bound to the loop it was created on. LiveKit Agents runs each job in its
@@ -23,6 +28,6 @@ def get_redis() -> redis.Redis:
     loop_id = id(asyncio.get_running_loop())
     client = _clients.get(loop_id)
     if client is None:
-        client = redis.from_url(REDIS_URL, decode_responses=True)
+        client = redis.from_url(_redis_url(), decode_responses=True)
         _clients[loop_id] = client
     return client
