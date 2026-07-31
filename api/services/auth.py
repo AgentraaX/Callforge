@@ -144,7 +144,15 @@ def _redirect_uri(provider: str) -> str:
     return f"{base.rstrip('/')}/auth/{provider}/callback"
 
 
-async def build_authorization_url(provider: str) -> str:
+def delete_redirect_uri() -> str:
+    """Redirect URI used for OAuth re-authentication during account deletion."""
+    base = os.getenv("OAUTH_REDIRECT_BASE_URL")
+    if not base:
+        raise RuntimeError("OAUTH_REDIRECT_BASE_URL is not set - cannot build an OAuth redirect_uri")
+    return f"{base.rstrip('/')}/auth/me-provider/callback"
+
+
+async def build_authorization_url(provider: str, redirect_uri: str | None = None) -> str:
     """Generates the provider's consent-screen URL and stashes a
     short-lived, single-use CSRF state token in Redis (validated by
     exchange_code_for_user on callback) - a stateless flow (no server
@@ -152,7 +160,7 @@ async def build_authorization_url(provider: str) -> str:
     config = _provider_config(provider)
     session = OAuth2Session(
         config["client_id"], config["client_secret"], scope=config["scope"],
-        redirect_uri=_redirect_uri(provider),
+        redirect_uri=redirect_uri or _redirect_uri(provider),
     )
     uri, state = session.create_authorization_url(config["authorize_url"])
 
@@ -171,14 +179,16 @@ async def _consume_state(provider: str, state: str) -> None:
         raise ValueError("OAuth state does not match the callback provider")
 
 
-def _fetch_provider_identity(provider: str, config: dict, code: str) -> tuple[str, str | None]:
+def _fetch_provider_identity(
+    provider: str, config: dict, code: str, redirect_uri: str | None = None,
+) -> tuple[str, str | None]:
     """Exchanges the authorization code for a token, then fetches the
     provider's userinfo endpoint. Returns (provider_user_id, email) -
     email may be None (GitHub users can keep their email private, in
     which case the caller falls back to a synthetic placeholder)."""
     session = OAuth2Session(
         config["client_id"], config["client_secret"],
-        redirect_uri=_redirect_uri(provider),
+        redirect_uri=redirect_uri or _redirect_uri(provider),
     )
     session.fetch_token(config["token_url"], code=code, grant_type="authorization_code")
 
@@ -204,14 +214,16 @@ def _fetch_provider_identity(provider: str, config: dict, code: str) -> tuple[st
     raise ValueError(f"Unknown provider: {provider}")
 
 
-async def exchange_code_for_user(db: Session, provider: str, code: str, state: str) -> User:
+async def exchange_code_for_user(
+    db: Session, provider: str, code: str, state: str, redirect_uri: str | None = None,
+) -> User:
     """Full callback flow: validate state, exchange code, fetch identity,
     then get-or-create the linked User. Raises ValueError on a bad/expired
     state (caller maps that to 400) or RuntimeError if the provider isn't
     configured (caller maps that to 503)."""
     await _consume_state(provider, state)
     config = _provider_config(provider)
-    provider_user_id, email = _fetch_provider_identity(provider, config, code)
+    provider_user_id, email = _fetch_provider_identity(provider, config, code, redirect_uri)
     return _get_or_create_oauth_user(db, provider, provider_user_id, email)
 
 

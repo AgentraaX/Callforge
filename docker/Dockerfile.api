@@ -5,6 +5,7 @@ WORKDIR /app
 COPY api/ ./api/
 COPY shared/ ./shared/
 COPY requirements-api.txt .
+COPY alembic.ini .
 
 RUN pip install --no-cache-dir -r requirements-api.txt
 

@@ -69,6 +69,68 @@ Requires `Authorization: Bearer <token>`.
 **Response 200:** same shape as `POST /auth/register`'s response.
 **Response 401:** `{"detail": "Missing or invalid Authorization header" | "Invalid or expired token" | "Invalid token subject" | "User no longer exists"}`
 
+### GET /auth/me/oauth
+Requires `Authorization: Bearer <token>`.
+Returns whether the authenticated user has any linked OAuth accounts and, if so, which providers are linked.
+**Response 200:**
+```json
+{"has_oauth": true, "providers": ["google", "github"]}
+```
+For a password-only account:
+```json
+{"has_oauth": false, "providers": []}
+```
+**Response 401:** same 401 shapes as `GET /auth/me`.
+
+### DELETE /auth/me-password
+Requires `Authorization: Bearer <token>`.
+Deletes a **password-based** account immediately after verifying the current password.
+**Request:**
+```json
+{"password": "string"}
+```
+**Response 204:** no body — account deleted.
+**Response 400:** `{"detail": "Password-based deletion is not available for OAuth accounts"}`
+**Response 403:** `{"detail": "Invalid password"}`
+**Response 401:** same 401 shapes as `GET /auth/me`.
+
+### POST /auth/me-provider
+Requires `Authorization: Bearer <token>`.
+Starts deletion for an **OAuth-only** account. Behavior depends on the linked provider:
+
+- **Google-linked accounts:** a 6-digit verification code is emailed to the user's registered address. The account is only deleted after that code is confirmed via `POST /auth/me-verify`.
+- **GitHub-linked accounts:** returns a redirect (307) to the GitHub consent screen so the user can re-authenticate with their GitHub password; deletion completes at `GET /auth/me-provider/callback`.
+
+If a user has both Google and GitHub linked, the Google (email-code) path takes precedence.
+
+**Request:** empty body.
+**Response 200 (Google):** `{"detail": "Verification code sent"}`
+**Response 307 (GitHub):** redirects to `https://github.com/login/oauth/authorize?...`
+**Response 400:** `{"detail": "Provider-based deletion is not available for password-based accounts"}` or `{"detail": "No supported OAuth provider linked to this account"}`
+**Response 503:** provider not configured (Google OAuth or GitHub OAuth credentials missing from `.env`).
+**Response 401:** same 401 shapes as `GET /auth/me`.
+
+### POST /auth/me-verify
+Requires `Authorization: Bearer <token>`.
+Confirms the Google account-deletion verification code and permanently deletes the account.
+**Request:**
+```json
+{"code": "string (6 digits)"}
+```
+**Response 204:** no body — account deleted.
+**Response 400:** `{"detail": "Invalid or expired code"}` or `{"detail": "Provider-based deletion is not available for password-based accounts"}`
+**Response 401:** same 401 shapes as `GET /auth/me`.
+
+### GET /auth/me-provider/callback
+GitHub redirects here after the user re-authenticates on the consent screen started by `POST /auth/me-provider`.
+**Query params:** same as `GET /auth/{provider}/callback`: `code` (string, required on success), `state` (string, required), `error`/`error_description` (present if the user declined consent).
+**Response 204:** no body — account deleted.
+**Response 400:** invalid/missing `code`, invalid/expired `state`, or user declined consent.
+**Response 503:** GitHub OAuth not configured.
+
+### Data consequences of deletion
+Deleting a user removes the `users` row and cascades to any linked `oauth_accounts` rows. `campaigns`, `leads`, `calls`, `transcripts`, `bookings`, and `objections` are currently not user-scoped and remain in the database.
+
 ## Auth on every other endpoint below
 `/campaigns`, `/leads`, `/calls`, `/analytics`, `/briefing` all now require
 `Authorization: Bearer <token>` on every route (see `api/dependencies.py`'s
