@@ -94,6 +94,87 @@ Deletes a **password-based** account immediately after verifying the current pas
 **Response 403:** `{"detail": "Invalid password"}`
 **Response 401:** same 401 shapes as `GET /auth/me`.
 
+### POST /auth/me-password/verify
+Requires `Authorization: Bearer <token>`.
+Confirms the user knows their current password — returns a boolean rather than
+raising 403 on a wrong password so the client can show an inline "wrong password"
+message and stay on the same form.
+**Request:**
+```json
+{"password": "string"}
+```
+**Response 200:**
+```json
+{"valid": true | false}
+```
+**Response 400:** `{"detail": "No password set on this account"}` — the authenticated user is OAuth-only (`password_hash` is `null`), so there is no password to verify.
+**Response 401:** same 401 shapes as `GET /auth/me`.
+
+### POST /auth/me-password/change
+Requires `Authorization: Bearer <token>`.
+Changes the password for a user who knows their current one — the classic "old +
+new" flow. The old password is the proof of identity here (no email code); for the
+email-code flow (used when the user can't or won't supply the old password), see
+`POST /auth/me-password/send-code` + `/reset` above. Strength is validated before
+the same-password check so a weak value reports the strength error first; the
+same-password check uses `verify_password` (timing-safe) rather than a plaintext `==`.
+Works only for password-set accounts (not OAuth-only).
+**Request:**
+```json
+{"old_password": "string", "new_password": "string"}
+```
+**Response 204:** no body — password changed.
+**Response 400:** `{"detail": "No password set on this account"}` (OAuth-only account, `password_hash` is `null`) OR `{"detail": "<password strength error msg>"}` (failed the same strength check as signup) OR `{"detail": "New password must differ from the current password"}`
+**Response 403:** `{"detail": "Invalid password"}` — `old_password` did not match.
+**Response 401:** same 401 shapes as `GET /auth/me`.
+
+### POST /auth/me-password/send-code
+Requires `Authorization: Bearer <token>`.
+Looks up the authenticated user's email and emails a one-time 6-digit verification
+code to it, for use in `POST /auth/me-password/reset`. The code is stored in Redis
+(`auth:password_change:{email}`, 10 min TTL — same pattern/shelf-life as the
+account-deletion code; see `docs/REDIS_SCHEMA.md`) and consumed only by `/reset`.
+**Request:** empty body.
+**Response 200:** `{"detail": "Verification code sent"}`
+**Response 503:** SMTP not fully configured (same `SMTP_*` vars as the daily briefing).
+**Response 401:** same 401 shapes as `GET /auth/me`.
+
+### POST /auth/me-password/verify-code
+Requires `Authorization: Bearer <token>`.
+Boolean pre-check of the emailed code so the frontend can enable/disable the
+"Change password" button before submit. Non-destructive: a wrong code does NOT
+consume the key; only `/reset` consumes it. Returns `valid=false` for a wrong,
+expired, or never-requested code, so the response can't leak which.
+**Request:**
+```json
+{"code": "string (6 digits)"}
+```
+**Response 200:**
+```json
+{"valid": true | false}
+```
+**Response 401:** same 401 shapes as `GET /auth/me`.
+
+### POST /auth/me-password/reset
+Requires `Authorization: Bearer <token>`.
+Sets a new password. The emailed code is **server-side enforced** (consumed
+atomically via `getdel`), not a UX hint — a stolen token alone cannot change the
+password without the email-inbox code. The new password is strength-validated
+against the same rules as signup (`api/services/auth.py::validate_password_strength`).
+Works for both password-set and OAuth-only accounts; for the latter it effectively
+"adds a password".
+**Request:**
+```json
+{"new_password": "string", "code": "string (6 digits)"}
+```
+**Response 204:** no body — password changed.
+**Response 400:** `{"detail": "Invalid or expired code"}` (wrong, expired, already-used, or never-requested code) OR `{"detail": "<password strength error msg>"}` (failed the same strength check as signup).
+**Response 401:** same 401 shapes as `GET /auth/me`.
+
+**Typical flow order:** `/verify` (re-check current password) → `/send-code` →
+`/verify-code` (enable the submit button) → `/reset`. Only `/reset` is required;
+the other three are UX helpers.
+
 ### POST /auth/me-provider
 Requires `Authorization: Bearer <token>`.
 Starts deletion for an **OAuth-only** account. Behavior depends on the linked provider:
