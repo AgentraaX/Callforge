@@ -14,27 +14,33 @@ from sqlalchemy.orm import Session
 
 from api.db.session import get_db
 from api.dependencies import get_current_user
-from api.models import User
+from api.models import OAuthAccount, User
 from api.schemas.auth import (
+    AccountDeletePasswordRequest,
+    AccountDeleteVerifyRequest,
     LoginRequest,
     SendVerificationCodeRequest,
     TokenResponse,
     UserCreate,
+    UserOAuthProvidersResponse,
     UserOut,
     VerifyCodeRequest,
 )
 from api.services.auth import (
     build_authorization_url,
     create_access_token,
+    delete_redirect_uri,
     exchange_code_for_user,
     hash_password,
     validate_password_strength,
     verify_password,
 )
 from api.services.email_verification import (
+    consume_pending_account_delete,
     consume_pending_registration,
     generate_verification_code,
     get_pending_registration,
+    send_account_delete_code,
     send_verification_email,
     store_pending_registration,
 )
@@ -137,6 +143,141 @@ def login(payload: LoginRequest, db: Session = Depends(get_db)):
 @router.get("/me", response_model=UserOut)
 def get_me(user: User = Depends(get_current_user)):
     return user
+
+
+@router.get("/me/oauth", response_model=UserOAuthProvidersResponse)
+def get_me_oauth(
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Return the OAuth providers linked to the current user."""
+    providers = [
+        row.provider
+        for row in db.query(OAuthAccount.provider)
+        .filter(OAuthAccount.user_id == user.id)
+        .all()
+    ]
+    return UserOAuthProvidersResponse(has_oauth=bool(providers), providers=providers)
+
+
+@router.delete("/me-password", status_code=204)
+async def delete_me_password(
+    payload: AccountDeletePasswordRequest,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Delete a password-based account after verifying the current password."""
+    if user.password_hash is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Password-based deletion is not available for OAuth accounts",
+        )
+    if not verify_password(payload.password, user.password_hash):
+        raise HTTPException(status_code=403, detail="Invalid password")
+    db.delete(user)
+    db.commit()
+    return None
+
+
+@router.post("/me-provider", status_code=200)
+async def delete_me_provider(
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Start deletion for an OAuth account.
+
+    Google-linked accounts receive an email verification code.
+    Non-Google OAuth accounts (e.g., GitHub) are redirected to the provider's
+    consent screen for re-authentication; deletion completes at the callback.
+    """
+    if user.password_hash is not None:
+        raise HTTPException(
+            status_code=400,
+            detail="Provider-based deletion is not available for password-based accounts",
+        )
+
+    linked_providers = {
+        row.provider
+        for row in db.query(OAuthAccount.provider).filter(OAuthAccount.user_id == user.id).all()
+    }
+
+    if "google" in linked_providers:
+        try:
+            await send_account_delete_code(user.email)
+        except RuntimeError as e:
+            raise HTTPException(status_code=503, detail=str(e))
+        return {"detail": "Verification code sent"}
+
+    if "github" in linked_providers:
+        try:
+            url = await build_authorization_url("github", redirect_uri=delete_redirect_uri())
+        except RuntimeError as e:
+            raise HTTPException(status_code=503, detail=str(e))
+        return RedirectResponse(url)
+
+    raise HTTPException(
+        status_code=400,
+        detail="No supported OAuth provider linked to this account",
+    )
+
+
+@router.post("/me-verify", status_code=204)
+async def verify_delete_me_provider(
+    payload: AccountDeleteVerifyRequest,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Confirm the Google OAuth account-deletion code and delete the account."""
+    if user.password_hash is not None:
+        raise HTTPException(
+            status_code=400,
+            detail="Provider-based deletion is not available for password-based accounts",
+        )
+
+    pending = await consume_pending_account_delete(user.email)
+    if pending is None or pending.get("code") != payload.code:
+        raise HTTPException(status_code=400, detail="Invalid or expired code")
+
+    db.delete(user)
+    db.commit()
+    return None
+
+
+@router.get("/me-provider/callback", status_code=204)
+async def delete_me_provider_callback(
+    code: str | None = Query(None),
+    state: str = Query(...),
+    error: str | None = Query(None),
+    error_description: str | None = Query(None),
+    db: Session = Depends(get_db),
+):
+    """GitHub redirects here after re-authentication; complete account deletion."""
+    if error is not None:
+        raise HTTPException(
+            status_code=400,
+            detail=f"github authorization was not completed: {error_description or error}",
+        )
+    if code is None:
+        raise HTTPException(status_code=400, detail="Missing 'code' query parameter")
+
+    try:
+        user = await exchange_code_for_user(
+            db, "github", code, state, redirect_uri=delete_redirect_uri()
+        )
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    if user.password_hash is not None:
+        raise HTTPException(
+            status_code=400,
+            detail="Provider-based deletion is not available for password-based accounts",
+        )
+
+    db.delete(user)
+    db.commit()
+    return None
 
 
 @router.get("/{provider}/login")
