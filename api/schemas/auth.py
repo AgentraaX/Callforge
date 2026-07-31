@@ -25,6 +25,41 @@ class VerifyCodeRequest(BaseModel):
     code: str
 
 
+class AccountDeletePasswordRequest(BaseModel):
+    password: str
+
+
+class AccountDeleteVerifyRequest(BaseModel):
+    code: str
+
+
+class PasswordVerifyRequest(BaseModel):
+    password: str
+
+
+class PasswordVerifyCodeRequest(BaseModel):
+    code: str
+
+
+class PasswordResetRequest(BaseModel):
+    new_password: str
+    code: str
+
+
+class PasswordChangeRequest(BaseModel):
+    old_password: str
+    new_password: str
+
+
+class BooleanResponse(BaseModel):
+    valid: bool
+
+
+class UserOAuthProvidersResponse(BaseModel):
+    has_oauth: bool
+    providers: list[str]
+
+
 class UserOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
