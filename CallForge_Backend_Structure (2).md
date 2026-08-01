@@ -93,12 +93,12 @@ Inbound/Outbound call
 
 | Table | Key Columns | Purpose |
 |---|---|---|
-| `campaigns` | id, name, status, pitch_variant_a, pitch_variant_b | Outbound campaign config |
-| `leads` | id, campaign_id, name, phone, company, status, enrichment_json | CSV-uploaded prospects |
-| `calls` | id, lead_id, direction, status, sentiment, duration, recording_url | Call metadata |
-| `transcripts` | id, call_id, speaker, text, timestamp | Turn-by-turn transcript |
-| `objections` | id, text, response, category, success_rate | Objection playbook |
-| `bookings` | id, call_id, calendar_event_id, scheduled_at | Meetings booked |
+| `campaigns` | id, **user_id**, name, status, pitch_variant_a, pitch_variant_b | Outbound campaign config (owned by a user) |
+| `leads` | id, **user_id**, campaign_id, name, phone, company, status, enrichment_json | CSV-uploaded prospects (owned by a user) |
+| `calls` | id, **user_id**, lead_id, direction, status, sentiment, duration, recording_url | Call metadata (owned by a user) |
+| `transcripts` | id, call_id, speaker, text, timestamp | Turn-by-turn transcript (owned via call) |
+| `objections` | id, text, response, category, success_rate | Objection playbook (global) |
+| `bookings` | id, **user_id**, call_id, calendar_event_id, scheduled_at | Meetings booked (owned by a user) |
 | `users` | id, email, password_hash, role | Sales team / managers |
 
 Use **Alembic** for migrations from Day 2 onward so schema changes stay versioned as the two backend devs work in parallel. Every migration must be reviewed by the other backend dev before merge, since both sides query these tables.

@@ -21,7 +21,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from api.db.session import SessionLocal
-from api.models import Call, Transcript
+from api.models import Call, Lead, Transcript
 from api.services.crm import push_call_outcome
 from shared.constants import CALL_STATE_KEY
 from shared.redis_client import get_redis
@@ -40,7 +40,15 @@ def _create_call_for_lead_sync(lead_id: str) -> str | None:
         return None
 
     with SessionLocal() as session:
-        call = Call(lead_id=lead_uuid, direction="outbound", status="pending")
+        lead = session.get(Lead, lead_uuid)
+        if lead is None:
+            return None
+        call = Call(
+            user_id=lead.user_id,
+            lead_id=lead_uuid,
+            direction="outbound",
+            status="pending",
+        )
         session.add(call)
         session.commit()
         session.refresh(call)

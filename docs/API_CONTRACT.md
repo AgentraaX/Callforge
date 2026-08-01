@@ -69,6 +69,149 @@ Requires `Authorization: Bearer <token>`.
 **Response 200:** same shape as `POST /auth/register`'s response.
 **Response 401:** `{"detail": "Missing or invalid Authorization header" | "Invalid or expired token" | "Invalid token subject" | "User no longer exists"}`
 
+### GET /auth/me/oauth
+Requires `Authorization: Bearer <token>`.
+Returns whether the authenticated user has any linked OAuth accounts and, if so, which providers are linked.
+**Response 200:**
+```json
+{"has_oauth": true, "providers": ["google", "github"]}
+```
+For a password-only account:
+```json
+{"has_oauth": false, "providers": []}
+```
+**Response 401:** same 401 shapes as `GET /auth/me`.
+
+### DELETE /auth/me-password
+Requires `Authorization: Bearer <token>`.
+Deletes a **password-based** account immediately after verifying the current password.
+**Request:**
+```json
+{"password": "string"}
+```
+**Response 204:** no body — account deleted.
+**Response 400:** `{"detail": "Password-based deletion is not available for OAuth accounts"}`
+**Response 403:** `{"detail": "Invalid password"}`
+**Response 401:** same 401 shapes as `GET /auth/me`.
+
+### POST /auth/me-password/verify
+Requires `Authorization: Bearer <token>`.
+Confirms the user knows their current password — returns a boolean rather than
+raising 403 on a wrong password so the client can show an inline "wrong password"
+message and stay on the same form.
+**Request:**
+```json
+{"password": "string"}
+```
+**Response 200:**
+```json
+{"valid": true | false}
+```
+**Response 400:** `{"detail": "No password set on this account"}` — the authenticated user is OAuth-only (`password_hash` is `null`), so there is no password to verify.
+**Response 401:** same 401 shapes as `GET /auth/me`.
+
+### POST /auth/me-password/change
+Requires `Authorization: Bearer <token>`.
+Changes the password for a user who knows their current one — the classic "old +
+new" flow. The old password is the proof of identity here (no email code); for the
+email-code flow (used when the user can't or won't supply the old password), see
+`POST /auth/me-password/send-code` + `/reset` above. Strength is validated before
+the same-password check so a weak value reports the strength error first; the
+same-password check uses `verify_password` (timing-safe) rather than a plaintext `==`.
+Works only for password-set accounts (not OAuth-only).
+**Request:**
+```json
+{"old_password": "string", "new_password": "string"}
+```
+**Response 204:** no body — password changed.
+**Response 400:** `{"detail": "No password set on this account"}` (OAuth-only account, `password_hash` is `null`) OR `{"detail": "<password strength error msg>"}` (failed the same strength check as signup) OR `{"detail": "New password must differ from the current password"}`
+**Response 403:** `{"detail": "Invalid password"}` — `old_password` did not match.
+**Response 401:** same 401 shapes as `GET /auth/me`.
+
+### POST /auth/me-password/send-code
+Requires `Authorization: Bearer <token>`.
+Looks up the authenticated user's email and emails a one-time 6-digit verification
+code to it, for use in `POST /auth/me-password/reset`. The code is stored in Redis
+(`auth:password_change:{email}`, 10 min TTL — same pattern/shelf-life as the
+account-deletion code; see `docs/REDIS_SCHEMA.md`) and consumed only by `/reset`.
+**Request:** empty body.
+**Response 200:** `{"detail": "Verification code sent"}`
+**Response 503:** SMTP not fully configured (same `SMTP_*` vars as the daily briefing).
+**Response 401:** same 401 shapes as `GET /auth/me`.
+
+### POST /auth/me-password/verify-code
+Requires `Authorization: Bearer <token>`.
+Boolean pre-check of the emailed code so the frontend can enable/disable the
+"Change password" button before submit. Non-destructive: a wrong code does NOT
+consume the key; only `/reset` consumes it. Returns `valid=false` for a wrong,
+expired, or never-requested code, so the response can't leak which.
+**Request:**
+```json
+{"code": "string (6 digits)"}
+```
+**Response 200:**
+```json
+{"valid": true | false}
+```
+**Response 401:** same 401 shapes as `GET /auth/me`.
+
+### POST /auth/me-password/reset
+Requires `Authorization: Bearer <token>`.
+Sets a new password. The emailed code is **server-side enforced** (consumed
+atomically via `getdel`), not a UX hint — a stolen token alone cannot change the
+password without the email-inbox code. The new password is strength-validated
+against the same rules as signup (`api/services/auth.py::validate_password_strength`).
+Works for both password-set and OAuth-only accounts; for the latter it effectively
+"adds a password".
+**Request:**
+```json
+{"new_password": "string", "code": "string (6 digits)"}
+```
+**Response 204:** no body — password changed.
+**Response 400:** `{"detail": "Invalid or expired code"}` (wrong, expired, already-used, or never-requested code) OR `{"detail": "<password strength error msg>"}` (failed the same strength check as signup).
+**Response 401:** same 401 shapes as `GET /auth/me`.
+
+**Typical flow order:** `/verify` (re-check current password) → `/send-code` →
+`/verify-code` (enable the submit button) → `/reset`. Only `/reset` is required;
+the other three are UX helpers.
+
+### POST /auth/me-provider
+Requires `Authorization: Bearer <token>`.
+Starts deletion for an **OAuth-only** account. Behavior depends on the linked provider:
+
+- **Google-linked accounts:** a 6-digit verification code is emailed to the user's registered address. The account is only deleted after that code is confirmed via `POST /auth/me-verify`.
+- **GitHub-linked accounts:** returns a redirect (307) to the GitHub consent screen so the user can re-authenticate with their GitHub password; deletion completes at `GET /auth/me-provider/callback`.
+
+If a user has both Google and GitHub linked, the Google (email-code) path takes precedence.
+
+**Request:** empty body.
+**Response 200 (Google):** `{"detail": "Verification code sent"}`
+**Response 307 (GitHub):** redirects to `https://github.com/login/oauth/authorize?...`
+**Response 400:** `{"detail": "Provider-based deletion is not available for password-based accounts"}` or `{"detail": "No supported OAuth provider linked to this account"}`
+**Response 503:** provider not configured (Google OAuth or GitHub OAuth credentials missing from `.env`).
+**Response 401:** same 401 shapes as `GET /auth/me`.
+
+### POST /auth/me-verify
+Requires `Authorization: Bearer <token>`.
+Confirms the Google account-deletion verification code and permanently deletes the account.
+**Request:**
+```json
+{"code": "string (6 digits)"}
+```
+**Response 204:** no body — account deleted.
+**Response 400:** `{"detail": "Invalid or expired code"}` or `{"detail": "Provider-based deletion is not available for password-based accounts"}`
+**Response 401:** same 401 shapes as `GET /auth/me`.
+
+### GET /auth/me-provider/callback
+GitHub redirects here after the user re-authenticates on the consent screen started by `POST /auth/me-provider`.
+**Query params:** same as `GET /auth/{provider}/callback`: `code` (string, required on success), `state` (string, required), `error`/`error_description` (present if the user declined consent).
+**Response 204:** no body — account deleted.
+**Response 400:** invalid/missing `code`, invalid/expired `state`, or user declined consent.
+**Response 503:** GitHub OAuth not configured.
+
+### Data consequences of deletion
+Deleting a user removes the `users` row and cascades to any linked `oauth_accounts` rows. `campaigns`, `leads`, `calls`, `bookings` are user-scoped and are deleted via `ON DELETE CASCADE` on `user_id`. `objections` and `transcripts` are not directly user-scoped (`objections` is a global playbook; `transcripts` are owned through their parent call).
+
 ## Auth on every other endpoint below
 `/campaigns`, `/leads`, `/calls`, `/analytics`, `/briefing` all now require
 `Authorization: Bearer <token>` on every route (see `api/dependencies.py`'s
@@ -76,6 +219,14 @@ Requires `Authorization: Bearer <token>`.
 token gets the same 401 shapes as `GET /auth/me` above. This was a breaking
 change applied once the frontend was confirmed ready to send tokens on every
 request (see `CallForge_Work.docx` section 2.3).
+
+### Data ownership
+Every authenticated user (`rep`) sees only the campaigns, leads, calls, and
+bookings they created. A `GET /campaigns/{id}` (or lead/call) that belongs to
+another user returns the same 404 as a nonexistent record, so IDs cannot be used
+to enumerate another user's data. `objections` remains a global playbook.
+`GET /analytics/conversion` and `GET /briefing/today` are scoped to the current
+user's data.
 
 ## Campaigns
 
@@ -86,6 +237,7 @@ Returns list of all campaigns, newest first.
 [
   {
     "id": "uuid",
+    "user_id": "uuid",
     "name": "string",
     "status": "draft | active | paused | completed",
     "pitch_variant_a": "string | null",
@@ -156,6 +308,7 @@ by `agent/graph/tools.py::book_meeting`.
   "items": [
     {
       "id": "uuid",
+      "user_id": "uuid",
       "lead_id": "uuid",
       "direction": "inbound | outbound",
       "status": "pending | active | completed | failed | no-answer",
@@ -288,6 +441,7 @@ pipeline view.
   "items": [
     {
       "id": "uuid",
+      "user_id": "uuid",
       "campaign_id": "uuid",
       "name": "string",
       "phone": "string",

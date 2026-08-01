@@ -19,10 +19,10 @@ someone seeds the playbook.
 from sqlalchemy import case, func
 from sqlalchemy.orm import Session
 
-from api.models import Booking, Call, Campaign, Lead, Objection
+from api.models import Booking, Call, Campaign, Lead, Objection, User
 
 
-def compute_conversion_stats(db: Session) -> dict:
+def compute_conversion_stats(db: Session, user: User) -> dict:
     rows = (
         db.query(
             Campaign.id,
@@ -31,6 +31,7 @@ def compute_conversion_stats(db: Session) -> dict:
             func.count(func.distinct(case((Call.status == "completed", Call.id)))).label("completed_calls"),
             func.count(func.distinct(Booking.id)).label("bookings"),
         )
+        .filter(Campaign.user_id == user.id)
         .outerjoin(Lead, Lead.campaign_id == Campaign.id)
         .outerjoin(Call, Call.lead_id == Lead.id)
         .outerjoin(Booking, Booking.call_id == Call.id)

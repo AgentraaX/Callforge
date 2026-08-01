@@ -27,23 +27,36 @@ def _create_fixture_call() -> str:
     reaches book_meeting).
     """
     from api.db.session import SessionLocal
-    from api.models import Call, Campaign, Lead
+    from api.models import Call, Campaign, Lead, User
+    from api.services.auth import hash_password
 
     db = SessionLocal()
     try:
-        campaign = db.query(Campaign).first()
+        user = db.query(User).first()
+        if user is None:
+            user = User(email="test-langgraph-flow@example.com", password_hash=hash_password("testpass123"))
+            db.add(user)
+            db.commit()
+            db.refresh(user)
+
+        campaign = db.query(Campaign).filter(Campaign.user_id == user.id).first()
         if campaign is None:
-            campaign = Campaign(name="LangGraph test fixture")
+            campaign = Campaign(user_id=user.id, name="LangGraph test fixture")
             db.add(campaign)
             db.commit()
             db.refresh(campaign)
 
-        lead = Lead(campaign_id=campaign.id, name="LangGraph test lead", phone="+15550001111")
+        lead = Lead(
+            user_id=user.id,
+            campaign_id=campaign.id,
+            name="LangGraph test lead",
+            phone="+15550001111",
+        )
         db.add(lead)
         db.commit()
         db.refresh(lead)
 
-        call = Call(lead_id=lead.id, direction="outbound", status="active")
+        call = Call(user_id=user.id, lead_id=lead.id, direction="outbound", status="active")
         db.add(call)
         db.commit()
         db.refresh(call)
