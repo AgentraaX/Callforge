@@ -12,14 +12,15 @@ import asyncio
 import logging
 import os
 import smtplib
-from datetime import date, datetime, time as dtime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
+from datetime import time as dtime
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
 from dotenv import load_dotenv
 
 from api.db.session import SessionLocal
-from api.models import Booking, Call, Campaign
+from api.models import Booking, Call, Campaign, User
 from shared.constants import BRIEFING_SENT_KEY
 from shared.redis_client import get_redis
 
@@ -35,16 +36,25 @@ def _day_bounds_utc(target_date: date) -> tuple[datetime, datetime]:
     return start, start + timedelta(days=1)
 
 
-def _generate_briefing_data_sync(target_date: date) -> dict:
+def _generate_briefing_data_sync(target_date: date, user: User | None) -> dict:
     start, end = _day_bounds_utc(target_date)
     with SessionLocal() as session:
-        calls = session.query(Call).filter(Call.created_at >= start, Call.created_at < end).all()
+        calls_query = session.query(Call).filter(Call.created_at >= start, Call.created_at < end)
+        bookings_query = session.query(Booking).filter(Booking.created_at >= start, Booking.created_at < end)
+        campaigns_query = session.query(Campaign)
+
+        if user is not None:
+            calls_query = calls_query.filter(Call.user_id == user.id)
+            bookings_query = bookings_query.filter(Booking.user_id == user.id)
+            campaigns_query = campaigns_query.filter(Campaign.user_id == user.id)
+
+        calls = calls_query.all()
         by_status: dict[str, int] = {}
         for call in calls:
             by_status[call.status] = by_status.get(call.status, 0) + 1
 
-        bookings = session.query(Booking).filter(Booking.created_at >= start, Booking.created_at < end).all()
-        active_campaigns = session.query(Campaign).filter(Campaign.status == "active").count()
+        bookings = bookings_query.all()
+        active_campaigns = campaigns_query.filter(Campaign.status == "active").count()
 
     return {
         "date": target_date.isoformat(),
@@ -56,8 +66,8 @@ def _generate_briefing_data_sync(target_date: date) -> dict:
     }
 
 
-async def generate_briefing_data(target_date: date) -> dict:
-    return await asyncio.to_thread(_generate_briefing_data_sync, target_date)
+async def generate_briefing_data(target_date: date, user: User | None = None) -> dict:
+    return await asyncio.to_thread(_generate_briefing_data_sync, target_date, user)
 
 
 def render_briefing_email(data: dict) -> tuple[str, str, str]:

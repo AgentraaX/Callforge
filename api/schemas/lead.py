@@ -9,6 +9,7 @@ class LeadOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: uuid.UUID
+    user_id: uuid.UUID
     campaign_id: uuid.UUID
     name: str
     phone: str

@@ -24,9 +24,17 @@ def _lead_for_call_sync(call_id: str) -> Lead | None:
         return lead
 
 
-def _create_booking_sync(call_id: str, scheduled_at: datetime) -> str:
+def _create_booking_sync(call_id: str, scheduled_at: datetime) -> str | None:
     with SessionLocal() as session:
-        booking = Booking(call_id=call_id, scheduled_at=scheduled_at)
+        call = session.get(Call, uuid.UUID(call_id))
+        if call is None:
+            logger.warning("Booking skipped: call %s not found", call_id)
+            return None
+        booking = Booking(
+            user_id=call.user_id,
+            call_id=call_id,
+            scheduled_at=scheduled_at,
+        )
         session.add(booking)
         session.commit()
         session.refresh(booking)

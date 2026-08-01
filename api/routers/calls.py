@@ -8,7 +8,7 @@ from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
 from api.db.session import get_db
-from api.dependencies import get_current_user
+from api.dependencies import get_current_user, user_filter
 from api.models import Call, Transcript, User
 from api.schemas.call import CallMonitorToken, CallOut, LiveCallState, PaginatedCalls
 from api.schemas.transcript import PaginatedTranscript
@@ -23,9 +23,17 @@ router = APIRouter(prefix="/calls", tags=["calls"], dependencies=[Depends(get_cu
 _VALID_STATUSES = {"pending", "active", "completed", "failed", "no-answer"}
 
 
+def _get_user_call(db: Session, user: User, call_id: uuid.UUID) -> Call:
+    call = db.get(Call, call_id)
+    if not call or call.user_id != user.id:
+        raise HTTPException(status_code=404, detail="Call not found")
+    return call
+
+
 @router.get("", response_model=PaginatedCalls)
 def list_calls(
     db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     status: str | None = Query(default=None),
@@ -36,7 +44,7 @@ def list_calls(
             detail=f"Invalid status. Valid values: {', '.join(sorted(_VALID_STATUSES))}",
         )
 
-    q = db.query(Call)
+    q = db.query(Call).filter(user_filter(user, Call))
     if status:
         q = q.filter(Call.status == status)
     q = q.order_by(Call.created_at.desc())
@@ -47,24 +55,27 @@ def list_calls(
 
 
 @router.get("/{call_id}", response_model=CallOut)
-def get_call(call_id: uuid.UUID, db: Session = Depends(get_db)):
-    call = db.get(Call, call_id)
-    if not call:
-        raise HTTPException(status_code=404, detail="Call not found")
-    return call
+def get_call(
+    call_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    return _get_user_call(db, user, call_id)
 
 
 @router.get("/{call_id}/live", response_model=LiveCallState)
-async def get_live_call_state(call_id: uuid.UUID, db: Session = Depends(get_db)):
+async def get_live_call_state(
+    call_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     """Redis-backed live state for a dashboard to poll during an active call
     (Section 5 contract: call:{call_id}:state / :sentiment, written by the
     agent - see agent/call_lifecycle.py). `status` is the durable Postgres
     value; `live_status`/`live_updated_at` reflect the last Redis write and
     are None if the call never ran through the agent (or Redis expired it).
     """
-    call = db.get(Call, call_id)
-    if not call:
-        raise HTTPException(status_code=404, detail="Call not found")
+    call = _get_user_call(db, user, call_id)
 
     state = await get_call_state(str(call_id))
     sentiment = await get_call_sentiment(str(call_id))
@@ -101,9 +112,7 @@ async def monitor_call(
     separate, unscoped decision - see docs/API_CONTRACT.md's
     POST /calls/{id}/takeover entry.
     """
-    call = db.get(Call, call_id)
-    if not call:
-        raise HTTPException(status_code=404, detail="Call not found")
+    call = _get_user_call(db, user, call_id)
     if call.status != "active":
         raise HTTPException(status_code=409, detail="Call is not active")
 
@@ -122,19 +131,18 @@ async def monitor_call(
 
 
 @router.get("/{call_id}/recording")
-def get_recording(call_id: uuid.UUID, db: Session = Depends(get_db)):
+def get_recording(
+    call_id: uuid.UUID,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
     """Day 11: streams the recording's bytes through our own API - the
     storage directory (api/services/recording_storage.py) is never mounted
     as a static path, so this endpoint is the only way to reach a
     recording, not a raw public URL.
-
-    No authentication check exists here yet, because no auth system exists
-    anywhere in this API yet (see docs/API_CONTRACT.md's Auth section) -
-    this is the one place a real deployment must add an authorization check
-    before going live; it must not ship without one.
     """
-    call = db.get(Call, call_id)
-    if not call or not call.recording_url:
+    call = _get_user_call(db, user, call_id)
+    if not call.recording_url:
         raise HTTPException(status_code=404, detail="Recording not found")
 
     path = get_recording_path(str(call_id))
@@ -148,12 +156,11 @@ def get_recording(call_id: uuid.UUID, db: Session = Depends(get_db)):
 def get_transcript(
     call_id: uuid.UUID,
     db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=100),
 ):
-    call = db.get(Call, call_id)
-    if not call:
-        raise HTTPException(status_code=404, detail="Call not found")
+    _get_user_call(db, user, call_id)
 
     q = (
         db.query(Transcript)

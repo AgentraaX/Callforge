@@ -210,7 +210,7 @@ GitHub redirects here after the user re-authenticates on the consent screen star
 **Response 503:** GitHub OAuth not configured.
 
 ### Data consequences of deletion
-Deleting a user removes the `users` row and cascades to any linked `oauth_accounts` rows. `campaigns`, `leads`, `calls`, `transcripts`, `bookings`, and `objections` are currently not user-scoped and remain in the database.
+Deleting a user removes the `users` row and cascades to any linked `oauth_accounts` rows. `campaigns`, `leads`, `calls`, `bookings` are user-scoped and are deleted via `ON DELETE CASCADE` on `user_id`. `objections` and `transcripts` are not directly user-scoped (`objections` is a global playbook; `transcripts` are owned through their parent call).
 
 ## Auth on every other endpoint below
 `/campaigns`, `/leads`, `/calls`, `/analytics`, `/briefing` all now require
@@ -219,6 +219,14 @@ Deleting a user removes the `users` row and cascades to any linked `oauth_accoun
 token gets the same 401 shapes as `GET /auth/me` above. This was a breaking
 change applied once the frontend was confirmed ready to send tokens on every
 request (see `CallForge_Work.docx` section 2.3).
+
+### Data ownership
+Every authenticated user (`rep`) sees only the campaigns, leads, calls, and
+bookings they created. A `GET /campaigns/{id}` (or lead/call) that belongs to
+another user returns the same 404 as a nonexistent record, so IDs cannot be used
+to enumerate another user's data. `objections` remains a global playbook.
+`GET /analytics/conversion` and `GET /briefing/today` are scoped to the current
+user's data.
 
 ## Campaigns
 
@@ -229,6 +237,7 @@ Returns list of all campaigns, newest first.
 [
   {
     "id": "uuid",
+    "user_id": "uuid",
     "name": "string",
     "status": "draft | active | paused | completed",
     "pitch_variant_a": "string | null",
@@ -299,6 +308,7 @@ by `agent/graph/tools.py::book_meeting`.
   "items": [
     {
       "id": "uuid",
+      "user_id": "uuid",
       "lead_id": "uuid",
       "direction": "inbound | outbound",
       "status": "pending | active | completed | failed | no-answer",
@@ -431,6 +441,7 @@ pipeline view.
   "items": [
     {
       "id": "uuid",
+      "user_id": "uuid",
       "campaign_id": "uuid",
       "name": "string",
       "phone": "string",

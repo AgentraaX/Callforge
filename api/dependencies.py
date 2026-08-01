@@ -18,10 +18,10 @@ def get_current_user(
     db: Session = Depends(get_db),
 ) -> User:
     """Validates the `Authorization: Bearer <jwt>` header and loads the
-    corresponding user. Raises 401 for any failure mode (missing header,
-    malformed scheme, invalid/expired/tampered token, or a token whose
-    `sub` no longer matches a user) - callers never need to distinguish
-    these, a 401 is a 401."""
+corresponding user. Raises 401 for any failure mode (missing header,
+malformed scheme, invalid/expired/tampered token, or a token whose
+`sub` no longer matches a user) - callers never need to distinguish
+these, a 401 is a 401."""
     if not authorization or not authorization.lower().startswith("bearer "):
         raise HTTPException(status_code=401, detail="Missing or invalid Authorization header")
 
@@ -41,3 +41,12 @@ def get_current_user(
         raise HTTPException(status_code=401, detail="User no longer exists")
 
     return user
+
+
+def user_filter(user: User, model):
+    """Return a query filter that scopes `model` to the current user.
+
+    Admin/manager roles are not implemented yet; every user sees only their
+    own rows. Existing rows with user_id NULL are invisible to regular users.
+    """
+    return model.user_id == user.id
