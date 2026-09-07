@@ -1,0 +1,6 @@
+-r requirements.txt
+
+# Test-only. The CRM tests run against SQLite so they need no Postgres.
+pytest>=8.0
+anyio>=4.0
+aiosqlite>=0.19

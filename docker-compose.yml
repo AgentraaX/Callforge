@@ -1,0 +1,59 @@
+version: "3.9"
+
+services:
+  backend:
+    build: ./backend
+    ports:
+      - "8000:8000"
+    env_file: .env
+    volumes:
+      - ./backend:/app
+      - ./shared:/app/shared
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "3000:3000"
+    environment:
+      - NEXT_PUBLIC_API_URL=http://localhost:8000
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    command: npm run dev
+
+  # LiveKit Agent worker -- powers the browser test-call voice pipeline
+  # (real WebRTC via LiveKit Cloud). No inbound ports: it connects OUT to
+  # LIVEKIT_URL, so unlike livekit-server itself this needs no special
+  # host networking and runs fine on any platform, including Windows.
+  # Requires LIVEKIT_URL/LIVEKIT_API_KEY/LIVEKIT_API_SECRET in .env from
+  # a LiveKit Cloud project -- this service just idles if unset.
+  #
+  # It's a SEPARATE process from `backend` with no shared memory -- it
+  # reaches persona/lead/booking/escalation/call data over HTTP via
+  # INTERNAL_API_KEY-guarded /internal/* endpoints (see internal_client.py
+  # and SALES_AGENT_SPEC.md). INTERNAL_BACKEND_URL is overridden here to
+  # the Docker Compose service DNS name -- "localhost" from .env would
+  # resolve to this container itself, not the backend container.
+  livekit_agent:
+    build: ./backend
+    env_file: .env
+    environment:
+      - INTERNAL_BACKEND_URL=http://backend:8000
+    depends_on:
+      - backend
+    volumes:
+      - ./backend:/app
+      - ./shared:/app/shared
+    command: python -m app.voice_agent.agent start
+
+  # Optional: GPU sidecar for STT/TTS (uncomment when needed)
+  # gpu-worker:
+  #   build: ./packages/gpu-worker
+  #   ports:
+  #     - "8001:8001"
+  #   deploy:
+  #     resources:
+  #       reservations:
+  #         devices:
+  #           - capabilities: [gpu]

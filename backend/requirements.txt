@@ -1,0 +1,20 @@
+fastapi>=0.110
+uvicorn[standard]>=0.29
+python-multipart>=0.0.9
+httpx>=0.27
+pydantic>=2.6
+pydantic-settings>=2.2
+edge-tts>=6.1
+faster-whisper>=1.0
+numpy>=1.26
+python-dotenv>=1.0
+dashscope>=1.20
+sentence-transformers>=2.2
+livekit-agents[elevenlabs,silero,openai]~=1.5
+livekit-api>=1.0
+
+# --- CRM persistence (Postgres) ---
+sqlalchemy[asyncio]>=2.0
+asyncpg>=0.29
+alembic>=1.13
+psycopg2-binary>=2.9   # sync driver used only by Alembic migrations
